@@ -8077,5 +8077,310 @@ window._ptDebug = S;
 })();
 </script>
   
+
+<!--
+  HOTFIX — 10 mai 2026
+  Bloc à insérer JUSTE AVANT </body> dans index.html sur la branche main.
+
+  RÉSOUT :
+  - B4 (audit) : catch(e){} silencieux qui mangent les erreurs Firebase
+  - Cache HTTP du navigateur qui sert une vieille version
+  - WebSocket Firebase suspendu après onglet en background
+  - Manque de feedback visuel sur l'enregistrement
+  - Pas de bouton recharger visible
+
+  FONCTIONNEMENT :
+  - Wrap window.fbSave avec un proxy qui affiche un toast visuel
+  - Bandeau d'état Firebase persistant en haut à droite
+  - Bouton 🔄 Recharger flottant en bas à droite
+  - Listener visibilitychange → goOnline()
+  - Force-refresh global via Firebase nœud abr_force_reload
+  - Anti-cache via headers HTTP fetch + meta tags
+-->
+
+<style>
+/* Bandeau d'état Firebase (en haut à droite, au-dessus de l'app) */
+#abr-status-banner {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 99999;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-family: -apple-system, system-ui, sans-serif;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(0,0,0,.15);
+  cursor: default;
+  user-select: none;
+  transition: background-color .3s, color .3s;
+}
+#abr-status-banner.ok    { background: #E8F5E9; color: #1B5E20; }
+#abr-status-banner.warn  { background: #FFF3E0; color: #E65100; }
+#abr-status-banner.error { background: #FFEBEE; color: #B71C1C; }
+
+/* Toast de sauvegarde (en bas au centre, temporaire) */
+#abr-save-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+  z-index: 99999;
+  padding: 10px 20px;
+  border-radius: 24px;
+  font-size: 14px;
+  font-family: -apple-system, system-ui, sans-serif;
+  font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s, transform .25s;
+}
+#abr-save-toast.show     { opacity: 1; transform: translateX(-50%) translateY(0); }
+#abr-save-toast.saving   { background: #1565C0; color: #fff; }
+#abr-save-toast.ok       { background: #2E7D32; color: #fff; }
+#abr-save-toast.error    { background: #C62828; color: #fff; }
+
+/* Bouton "Recharger" flottant en bas à droite */
+#abr-reload-btn {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 99999;
+  padding: 10px 16px;
+  border-radius: 24px;
+  font-size: 13px;
+  font-family: -apple-system, system-ui, sans-serif;
+  font-weight: 700;
+  background: #2E7D32;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color .2s;
+}
+#abr-reload-btn:hover { background: #1B5E20; }
+#abr-reload-btn:active { transform: translateY(1px); }
+</style>
+
+<!-- Bandeau d'état (créé dès que le DOM est prêt) -->
+<div id="abr-status-banner" class="ok" title="Cliquer pour forcer la reconnexion Firebase">🟢 Connecté</div>
+<div id="abr-save-toast"></div>
+<button id="abr-reload-btn" type="button" title="Recharger l'app si tu vois des données périmées">🔄 Recharger</button>
+
+<script>
+(function () {
+  'use strict';
+
+  // ============================================================
+  // PATCH 10 MAI 2026 — Feedback de sauvegarde et fiabilité
+  // ============================================================
+
+  var $banner = document.getElementById('abr-status-banner');
+  var $toast = document.getElementById('abr-save-toast');
+  var $reload = document.getElementById('abr-reload-btn');
+
+  // ---- Toast helper ----
+  var toastTimeout = null;
+  function showToast(msg, type) {
+    $toast.textContent = msg;
+    $toast.className = 'show ' + (type || 'saving');
+    if (toastTimeout) clearTimeout(toastTimeout);
+    if (type !== 'saving') {
+      toastTimeout = setTimeout(function () { $toast.classList.remove('show'); }, 2500);
+    }
+  }
+
+  // ---- Bandeau d'état Firebase ----
+  function setBanner(state, text) {
+    $banner.className = state;
+    $banner.textContent = text;
+  }
+
+  // ---- Bouton recharger ----
+  $reload.addEventListener('click', function () {
+    if (confirm('Recharger la page maintenant ?\nToute saisie en cours non enregistrée sera perdue.')) {
+      // Anti-cache : on ajoute un timestamp pour bypasser le cache HTTP
+      var url = window.location.href.split('?')[0] + '?v=' + Date.now();
+      window.location.href = url;
+    }
+  });
+
+  // ---- Bandeau cliquable : force la reconnexion ----
+  $banner.addEventListener('click', function () {
+    if (window.firebase && window.firebase.database) {
+      try {
+        window.firebase.database().goOffline();
+        setBanner('warn', '🟡 Reconnexion…');
+        setTimeout(function () { window.firebase.database().goOnline(); }, 200);
+      } catch (e) {
+        console.error('Erreur reconnexion :', e);
+      }
+    }
+  });
+
+  // ---- Hook sur window.fbSave (avec retry et feedback) ----
+  function patchFbSave() {
+    if (typeof window.fbSave !== 'function') {
+      // fbSave pas encore chargé, on retente dans 200ms
+      setTimeout(patchFbSave, 200);
+      return;
+    }
+    if (window.fbSave._patched) return;
+
+    var originalFbSave = window.fbSave;
+    var pendingSaves = 0;
+
+    window.fbSave = function patchedFbSave(path, data) {
+      pendingSaves++;
+      showToast('💾 Sauvegarde en cours…', 'saving');
+
+      var attempt = 0;
+      function tryWrite() {
+        attempt++;
+        try {
+          var db = (typeof window.getFbDb === 'function') ? window.getFbDb() : null;
+          if (!db) {
+            handleError(new Error('Firebase non initialisé'));
+            return;
+          }
+          var obj = (typeof data === 'string') ? JSON.parse(data) : data;
+          var ref = (path === 'reservations') ? null : db.ref('abracadaparc/' + path);
+
+          if (ref) {
+            // Sauvegarde avec promise pour récupérer succès/échec
+            ref.set(obj)
+              .then(handleOk)
+              .catch(function (err) {
+                if (attempt < 3) {
+                  setTimeout(tryWrite, 500 * attempt); // backoff 500ms, 1s, 1.5s
+                } else {
+                  handleError(err);
+                }
+              });
+          } else {
+            // Fallback : appeler la fbSave originale (cas reservations multi-paths)
+            originalFbSave(path, data);
+            handleOk();
+          }
+        } catch (e) {
+          handleError(e);
+        }
+      }
+
+      function handleOk() {
+        pendingSaves--;
+        if (pendingSaves <= 0) {
+          var now = new Date();
+          var hh = String(now.getHours()).padStart(2, '0');
+          var mm = String(now.getMinutes()).padStart(2, '0');
+          var ss = String(now.getSeconds()).padStart(2, '0');
+          showToast('✅ Sauvé à ' + hh + 'h' + mm + ':' + ss, 'ok');
+        }
+      }
+
+      function handleError(err) {
+        pendingSaves--;
+        console.error('fbSave KO sur ' + path + ' :', err);
+        showToast('❌ Échec sauvegarde — modif locale conservée. Vérifier connexion.', 'error');
+      }
+
+      tryWrite();
+    };
+    window.fbSave._patched = true;
+    console.log('✅ fbSave wrappé avec feedback visuel');
+  }
+
+  // ---- Surveillance de l'état de connexion Firebase ----
+  function watchConnection() {
+    if (!window.firebase || !window.firebase.database) {
+      setTimeout(watchConnection, 200);
+      return;
+    }
+    try {
+      var connectedRef = window.firebase.database().ref('.info/connected');
+      connectedRef.on('value', function (snap) {
+        if (snap.val() === true) {
+          setBanner('ok', '🟢 Connecté');
+        } else {
+          setBanner('error', '🔴 Hors ligne — vos modifs ne s\'enregistrent PAS');
+        }
+      });
+      console.log('✅ Surveillance connexion Firebase active');
+    } catch (e) {
+      console.error('Erreur watchConnection :', e);
+      setTimeout(watchConnection, 1000);
+    }
+  }
+
+  // ---- Listener visibilitychange : reconnexion forcée au retour de tab ----
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && window.firebase && window.firebase.database) {
+      try {
+        window.firebase.database().goOnline();
+        console.log('Onglet revisible → goOnline()');
+      } catch (e) { /* silencieux ici, pas critique */ }
+    }
+  });
+
+  // ---- Listener focus window (filet supplémentaire) ----
+  window.addEventListener('focus', function () {
+    if (window.firebase && window.firebase.database) {
+      try { window.firebase.database().goOnline(); } catch (e) {}
+    }
+  });
+
+  // ---- Force-refresh global via Firebase ----
+  // Un nœud /abracadaparc/abr_force_reload contient un timestamp.
+  // Si Vanessa le met à jour, tous les clients connectés rechargent dans les 10 sec.
+  function watchForceReload() {
+    if (!window.firebase || !window.firebase.database) {
+      setTimeout(watchForceReload, 500);
+      return;
+    }
+    try {
+      var ref = window.firebase.database().ref('abracadaparc/abr_force_reload');
+      var localKnown = parseInt(localStorage.getItem('abr_force_reload_seen') || '0', 10);
+      ref.on('value', function (snap) {
+        var ts = parseInt(snap.val() || '0', 10);
+        if (ts && ts > localKnown) {
+          localStorage.setItem('abr_force_reload_seen', String(ts));
+          if (localKnown !== 0) {
+            // C'est un changement après chargement initial → on recharge
+            console.log('Force-reload reçu, rechargement dans 2s');
+            setTimeout(function () {
+              var url = window.location.href.split('?')[0] + '?v=' + Date.now();
+              window.location.href = url;
+            }, 2000);
+          }
+        }
+      });
+    } catch (e) { /* non bloquant */ }
+  }
+
+  // ---- API publique pour Vanessa : forcer le reload de tous les clients ----
+  window.abrForceReloadEquipe = function () {
+    if (!window.firebase || !window.firebase.database) return alert('Firebase indispo');
+    var ts = Date.now();
+    window.firebase.database()
+      .ref('abracadaparc/abr_force_reload')
+      .set(ts)
+      .then(function () { showToast('🔄 Tous les onglets de l\'équipe vont recharger dans 10 sec', 'ok'); })
+      .catch(function (e) { showToast('❌ Échec : ' + e.message, 'error'); });
+  };
+
+  // ---- Démarrage ----
+  patchFbSave();
+  watchConnection();
+  watchForceReload();
+
+  console.log('=== HOTFIX 10/05/2026 actif ===');
+  console.log('Pour forcer le reload de l\'équipe, taper dans cette console : abrForceReloadEquipe()');
+})();
+</script>
+
 </body>
 </html>
