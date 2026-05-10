@@ -4862,27 +4862,57 @@ function fbOn(path, cb) {
 // ═══════════════════════════════════════════════════════════
 
 function calcCP(emp, shifts, season) {
+  // LOGIQUE : CP au prorata des heures réelles vs heures contractuelles (modulation IDCC 1790)
+  // Pour chaque mois TERMINÉ, on calcule : 2,5 × (heures réelles / heures contractuelles), plafonné à 2,5.
+  // Cas particuliers :
+  //   - Apprenti : l'école compte comme heures (pour atteindre les 2,5 j/mois)
+  //   - Stagiaire : pas de CP (gratification stage non soumise à CP)
   const start = emp.debut > season.start ? emp.debut : season.start;
   const end   = emp.fin   < season.end   ? emp.fin   : season.end;
-  // ⚠️ CP légaux : acquis seulement après le mois TERMINÉ, pas sur les mois futurs
-  const today = new Date();
-  const lastCompletedMonth = `${today.getFullYear()}-${String(today.getMonth()).padStart(2,"0")}`;
-  // today.getMonth() = mois actuel (0-based) → mois précédent = getMonth() sans +1
 
-  const months = new Set();
+  // Stagiaire ou POEI : pas de CP du tout (gratification stage / France Travail pour POEI)
+  if (
+    emp.type === 'stagiaire'
+    || emp.type === 'poei'
+    || (emp.contrat || '').toLowerCase().includes('stage')
+    || (emp.contrat || '').toLowerCase().includes('poei')
+  ) {
+    return { acquis: 0, pris: 0, restants: 0, pris_reel: 0, ajustement: 0, deficit: false };
+  }
+
+  // ⚠️ CP légaux : acquis seulement après le mois TERMINÉ
+  // FIX bug janvier (audit C5) : si on est en janvier, le dernier mois terminé est décembre n-1
+  const today = new Date();
+  const m0 = today.getMonth(); // 0-based
+  const lastMonth1Based = m0 === 0 ? 12 : m0;        // décembre si janvier
+  const lastMonthYear   = m0 === 0 ? today.getFullYear() - 1 : today.getFullYear();
+  const lastCompletedMonth = `${lastMonthYear}-${String(lastMonth1Based).padStart(2,"0")}`;
+
+  // Cumul heures par mois (travail + école pour apprenti) + comptage CP pris
+  const heuresParMois = {};
   let pris = 0;
   Object.entries(shifts).forEach(([k, sh]) => {
     if (!k.startsWith(emp.id+"_")) return;
     const ds = k.replace(emp.id+"_","");
     if (ds < start || ds > end) return;
     const monthKey = ds.slice(0,7);
-    // Compter seulement les mois TERMINÉS (pas le mois en cours ni futurs)
     if (monthKey <= lastCompletedMonth) {
-      if (sh.type === "travail" || sh.type === "ecole") months.add(monthKey);
+      if (sh.type === "travail" || sh.type === "ecole") {
+        heuresParMois[monthKey] = (heuresParMois[monthKey] || 0) + (Number(sh.h) || 0);
+      }
     }
     if (sh.type === "conges") pris++;
   });
-  const acquis = Math.round(months.size * 2.5 * 10) / 10;
+
+  // Prorata : pour chaque mois terminé, CP acquis = 2,5 × min(1, heures réelles / heures contractuelles)
+  const heuresContrat = Math.max(1, parseFloat(emp.heures_mois) || 151.67);
+  let acquisRaw = 0;
+  Object.values(heuresParMois).forEach(hMois => {
+    const ratio = Math.min(1, hMois / heuresContrat);
+    acquisRaw += 2.5 * ratio;
+  });
+  const acquis = Math.round(acquisRaw * 10) / 10;
+
   const ajustement = Number(emp.cp_ajustement || 0);
   const total_pris = pris + ajustement;
   const restants = Math.round((acquis - total_pris) * 10) / 10;
