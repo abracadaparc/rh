@@ -1,0 +1,66 @@
+# LOGIQUE : déploiement automatique du canary /v2/ à chaque push sur la branche refonte-2026.
+# - Build via Vite
+# - Push du contenu de dist/ dans le sous-dossier v2/ de la branche main
+# - L'ancienne app à la racine reste intacte
+#
+# SÉCURITÉ : utilise GITHUB_TOKEN (auto-fourni par GitHub Actions, scope limité au repo).
+
+name: Deploy canary /v2/
+
+on:
+  push:
+    branches:
+      - refonte-2026
+  workflow_dispatch:  # permet un lancement manuel depuis l'UI Actions
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout refonte-2026
+        uses: actions/checkout@v4
+        with:
+          ref: refonte-2026
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build
+
+      - name: Checkout main (target branch)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: target-main
+
+      - name: Replace v2/ folder in main
+        run: |
+          rm -rf target-main/v2
+          mkdir -p target-main/v2
+          cp -r dist/* target-main/v2/
+
+      - name: Commit and push v2/ on main
+        working-directory: target-main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add v2
+          if git diff --cached --quiet; then
+            echo "Aucun changement dans v2/, rien à commiter."
+          else
+            git commit -m "build(canary): deploy v2/ from refonte-2026 @ ${GITHUB_SHA::7}"
+            git push origin main
+          fi

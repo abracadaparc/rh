@@ -1,32 +1,30 @@
-# macOS
-.DS_Store
+# Logs
+*.log
+npm-debug.log*
+
+# Build
+node_modules
+dist
+dist-ssr
+*.local
 
 # Éditeurs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
 
-# Logs et temporaires
-*.log
-.tmp/
-*.tmp
-
-# Variables d'environnement et secrets
+# Secrets
 .env
 .env.local
 .env.*.local
 
-# Dépendances
-node_modules/
-
-# Sauvegardes locales / fichiers d'archive RGPD
+# Archives RGPD locales
 sauvegarde-*
 _archives-*
 *-export.json
 *-private.json
 *-rh-main.zip
 
-# Scripts ponctuels contenant des données clients
+# Scripts ponctuels avec données clients
 import_reservations*.js
