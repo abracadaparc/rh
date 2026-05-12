@@ -2042,7 +2042,7 @@ const LEVELS = {
 
 const TEAM_INIT = [
   {
-    id:"t1", nom:"", prenom:"", color:"#1565C0",
+    id:"t1", nom:"", prenom:"Myron", color:"#1565C0",
     type:"apprenti", contrat:"Contrat d'apprentissage",
     debut:"2026-04-01", fin:"2027-08-31", heures_mois:151.67, taux:6.13,
     disponibilite:"Disponible tous les jours par défaut. Marquer manuellement 'ÉCOLE' les jours de formation.",
@@ -2052,7 +2052,7 @@ const TEAM_INIT = [
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:23,
   },
   {
-    id:"t2", nom:"", prenom:"", color:"#00695C",
+    id:"t2", nom:"", prenom:"Aythann", color:"#00695C",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
     debut:"2026-04-01", fin:"2026-11-02", heures_mois:104, taux:12.02,
     disponibilite:"Avr–Mai : WE seulement · Juin–Juil : complet · Août : S1–S2 · Sept–Nov : WE (à confirmer)",
@@ -2062,7 +2062,7 @@ const TEAM_INIT = [
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
   },
   {
-    id:"t3", nom:"", prenom:"", color:"#6A1B9A",
+    id:"t3", nom:"", prenom:"Alyssa", color:"#6A1B9A",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
     debut:"2026-04-01", fin:"2026-06-21", heures_mois:80, taux:12.02,
     disponibilite:"MER + WE seulement. Sam : départ à 16h30. 3 avril : dispo à partir de 14h. Jours fériés : à confirmer 3 sem. avant.",
@@ -2072,7 +2072,7 @@ const TEAM_INIT = [
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
   },
   {
-    id:"t4", nom:"", prenom:"", color:"#BF360C",
+    id:"t4", nom:"", prenom:"Belenz", color:"#BF360C",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
     debut:"2026-04-20", fin:"2026-11-02", heures_mois:104, taux:12.02,
     disponibilite:"POEI validé ✅ — Formation France Travail 1–19 avril. CDD démarré le 20 avril 2026. Disponible toute la saison. WE confirmés sept–oct. Toussaint confirmé.",
@@ -2084,7 +2084,7 @@ const TEAM_INIT = [
     poei_debut:"2026-04-01", poei_fin:"2026-04-19", poei_organisme:"France Travail",
   },
   {
-    id:"t5", nom:"", prenom:"", color:"#AD1457",
+    id:"t5", nom:"", prenom:"Florence", color:"#AD1457",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
     debut:"2026-04-20", fin:"2026-11-02", heures_mois:120, taux:12.02,
     disponibilite:"POEI validé ✅ — Formation France Travail du 1er au 19 avril inclus. Disponible à partir du 20 avril. Toute la saison. WE confirmés sept–nov. Toussaint confirmé.",
@@ -2095,7 +2095,7 @@ const TEAM_INIT = [
     poei_debut:"2026-04-01", poei_fin:"2026-04-19", poei_organisme:"France Travail",
   },
   {
-    id:"sally_s", nom:"", prenom:"", color:"#00897B",
+    id:"sally_s", nom:"", prenom:"Sally", color:"#00897B",
     type:"stagiaire", contrat:"Convention de stage",
     debut:"2026-04-14", fin:"2026-07-31", heures_mois:140, taux:4.50,
     disponibilite:"Mardi au Samedi · 11h00 → 18h30 (7h effectives/jour). Fériés non payés : 1er mai, 7 mai, 22 mai, 29 mai, 12 juin.",
@@ -2782,7 +2782,6 @@ function EquipeTab({ team, setTeam }) {
             <div><label style={S.lbl}>Début</label><input type="date" value={form.debut} onChange={f("debut")} style={S.inp} /></div>
             <div><label style={S.lbl}>Fin</label><input type="date" value={form.fin} onChange={f("fin")} style={S.inp} /></div>
             <div><label style={S.lbl}>Heures/mois</label><input type="number" value={form.heures_mois} onChange={f("heures_mois")} style={S.inp} /></div>
-            <div><label style={S.lbl}>Heures moy/jour (CP)</label><input type="number" step="0.01" value={form.heures_jour||""} onChange={f("heures_jour")} placeholder={`auto ${form.heures_mois?(form.heures_mois/21.67).toFixed(2):"7"}`} style={S.inp} /></div>
             <div><label style={S.lbl}>Taux €/h</label><input type="number" step="0.01" value={form.taux} onChange={f("taux")} style={S.inp} /></div>
             <div style={{ gridColumn:"1/-1" }}><label style={S.lbl}>Disponibilité</label><textarea value={form.disponibilite} onChange={f("disponibilite")} style={{ ...S.inp, height:70, resize:"vertical" }} /></div>
             <div style={{ gridColumn:"1/-1" }}><label style={S.lbl}>Note interne</label><input value={form.note} onChange={f("note")} style={S.inp} /></div>
@@ -4874,57 +4873,27 @@ function fbOn(path, cb) {
 // ═══════════════════════════════════════════════════════════
 
 function calcCP(emp, shifts, season) {
-  // LOGIQUE : CP au prorata des heures réelles vs heures contractuelles (modulation IDCC 1790)
-  // Pour chaque mois TERMINÉ, on calcule : 2,5 × (heures réelles / heures contractuelles), plafonné à 2,5.
-  // Cas particuliers :
-  //   - Apprenti : l'école compte comme heures (pour atteindre les 2,5 j/mois)
-  //   - Stagiaire : pas de CP (gratification stage non soumise à CP)
   const start = emp.debut > season.start ? emp.debut : season.start;
   const end   = emp.fin   < season.end   ? emp.fin   : season.end;
-
-  // Stagiaire ou POEI : pas de CP du tout (gratification stage / France Travail pour POEI)
-  if (
-    emp.type === 'stagiaire'
-    || emp.type === 'poei'
-    || (emp.contrat || '').toLowerCase().includes('stage')
-    || (emp.contrat || '').toLowerCase().includes('poei')
-  ) {
-    return { acquis: 0, pris: 0, restants: 0, pris_reel: 0, ajustement: 0, deficit: false };
-  }
-
-  // ⚠️ CP légaux : acquis seulement après le mois TERMINÉ
-  // FIX bug janvier (audit C5) : si on est en janvier, le dernier mois terminé est décembre n-1
+  // ⚠️ CP légaux : acquis seulement après le mois TERMINÉ, pas sur les mois futurs
   const today = new Date();
-  const m0 = today.getMonth(); // 0-based
-  const lastMonth1Based = m0 === 0 ? 12 : m0;        // décembre si janvier
-  const lastMonthYear   = m0 === 0 ? today.getFullYear() - 1 : today.getFullYear();
-  const lastCompletedMonth = `${lastMonthYear}-${String(lastMonth1Based).padStart(2,"0")}`;
+  const lastCompletedMonth = `${today.getFullYear()}-${String(today.getMonth()).padStart(2,"0")}`;
+  // today.getMonth() = mois actuel (0-based) → mois précédent = getMonth() sans +1
 
-  // Cumul heures par mois (travail + école pour apprenti) + comptage CP pris
-  const heuresParMois = {};
+  const months = new Set();
   let pris = 0;
   Object.entries(shifts).forEach(([k, sh]) => {
     if (!k.startsWith(emp.id+"_")) return;
     const ds = k.replace(emp.id+"_","");
     if (ds < start || ds > end) return;
     const monthKey = ds.slice(0,7);
+    // Compter seulement les mois TERMINÉS (pas le mois en cours ni futurs)
     if (monthKey <= lastCompletedMonth) {
-      if (sh.type === "travail" || sh.type === "ecole") {
-        heuresParMois[monthKey] = (heuresParMois[monthKey] || 0) + (Number(sh.h) || 0);
-      }
+      if (sh.type === "travail" || sh.type === "ecole") months.add(monthKey);
     }
     if (sh.type === "conges") pris++;
   });
-
-  // Prorata : pour chaque mois terminé, CP acquis = 2,5 × min(1, heures réelles / heures contractuelles)
-  const heuresContrat = Math.max(1, parseFloat(emp.heures_mois) || 151.67);
-  let acquisRaw = 0;
-  Object.values(heuresParMois).forEach(hMois => {
-    const ratio = Math.min(1, hMois / heuresContrat);
-    acquisRaw += 2.5 * ratio;
-  });
-  const acquis = Math.round(acquisRaw * 10) / 10;
-
+  const acquis = Math.round(months.size * 2.5 * 10) / 10;
   const ajustement = Number(emp.cp_ajustement || 0);
   const total_pris = pris + ajustement;
   const restants = Math.round((acquis - total_pris) * 10) / 10;
@@ -4943,7 +4912,7 @@ function calcMonthAlerts(team, shifts, year, month) {
     for (let i=1; i<=days; i++) {
       const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;
       const sh=shifts[`${emp.id}_${ds}`];
-      if (sh?.type==="travail" || sh?.type==="conges" || sh?.type==="ecole") worked += sh.h||0;
+      if (sh?.type==="travail") worked += sh.h||0;
       if (sh?.type==="retard") { retards++; totalRetardH += sh.hRetard||0; }
     }
     const ratio = worked / emp.heures_mois;
@@ -5129,9 +5098,6 @@ function ShiftModal({emp,date,shift,onSave,onClose}) {
   const [fin,setFin]=useState(shift?.fin||"17:00");
   const [note,setNote]=useState(shift?.note||"");
   const [hRetard,setHRetard]=useState(shift?.hRetard||0);
-  // Heures moyennes/jour pour CP (option A : modulation IDCC 1790)
-  const defaultCpH = parseFloat(emp.heures_jour) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
-  const [cpH,setCpH] = useState(shift?.type==="conges" ? (parseFloat(shift?.h)||defaultCpH) : defaultCpH);
   const calcH=(d,f)=>{const[dh,dm]=[...d.split(":").map(Number)],[fh,fm]=[...f.split(":").map(Number)];const tot=fh*60+fm-(dh*60+dm);return tot<=0?0:Math.round((tot-30)/60*100)/100;};
   const h=calcH(deb,fin); const is1Mai=date==="2026-05-01";
   return (
@@ -5157,22 +5123,10 @@ function ShiftModal({emp,date,shift,onSave,onClose}) {
             <strong>{Math.max(0,h).toFixed(2)}h</strong> (−30min pause) · <strong>{(Math.max(0,h)*(parseFloat(emp.taux)||0)*(is1Mai?2:1)).toFixed(2)}€ brut</strong>{is1Mai&&<span style={{color:"#E53935"}}> ×2</span>}
           </div>
         </>)}
-        {type==="conges"&&(<>
-          <div style={{marginBottom:8}}>
-            <label style={S.lbl}>Heures CP à payer</label>
-            <input type="number" step="0.01" value={cpH} onChange={e=>setCpH(parseFloat(e.target.value)||0)} style={S.inp}/>
-            <div style={{fontSize:11,color:"#9E9E9E",marginTop:2}}>
-              Auto : {defaultCpH.toFixed(2)}h {emp.heures_jour?"(fiche salarié)":"(heures_mois/21,67)"}
-            </div>
-          </div>
-          <div style={{background:"#FFF3E0",borderRadius:8,padding:"7px 12px",textAlign:"center",fontSize:12,color:"#E65100",marginBottom:8}}>
-            <strong>{cpH.toFixed(2)}h CP</strong> · <strong>{(cpH*(parseFloat(emp.taux)||0)).toFixed(2)}€ brut</strong>
-          </div>
-        </>)}
         {type==="retard"&&(<div style={{marginBottom:10}}><label style={S.lbl}>Durée retard (h)</label><input type="number" step="0.25" min={0} max={8} value={hRetard} onChange={e=>setHRetard(Number(e.target.value))} style={S.inp}/></div>)}
         <div style={{marginBottom:12}}><label style={S.lbl}>Note</label><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Certificat, départ anticipé…" style={S.inp}/></div>
         <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>onSave({type,deb,fin,h:type==="conges"?cpH:Math.max(0,h),note,hRetard})} style={{...S.btn,...S.btnG,flex:1}}>Valider</button>
+          <button onClick={()=>onSave({type,deb,fin,h:Math.max(0,h),note,hRetard})} style={{...S.btn,...S.btnG,flex:1}}>Valider</button>
           {shift&&<button onClick={()=>onSave(null)} style={{...S.btn,...S.btnD}}>Effacer</button>}
           <button onClick={onClose} style={{...S.btn,...S.btnS}}>Annuler</button>
         </div>
@@ -5405,7 +5359,7 @@ function exportPDF(team, shifts, monday) {
       const note=sh.note?`<br><i style='color:#666;font-size:8px'>💬 ${sh.note.slice(0,30)}</i>`:"";
       return `<td style='color:${col};text-align:center'>${txt}${note}</td>`;
     }).join("");
-    const tot=week.reduce((s,d)=>{const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+((sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")?(sh.h||0):0);},0);
+    const tot=week.reduce((s,d)=>{const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+(sh?.type==="travail"?(sh.h||0):0);},0);
     const {acquis,pris,restants}=calcCP(emp,shifts,season);
     return `<tr><td><b>${emp.prenom?emp.prenom+" ":""}</b>${emp.nom}<br><small>${emp.poste}</small></td>${cells}<td style='text-align:center'><b>${tot.toFixed(1)}h</b></td><td style='text-align:center;font-size:8px'>CP: ${acquis}acq / ${pris}posés<br><b>${restants} restants</b></td></tr>`;
   }).join("");
@@ -5450,7 +5404,7 @@ function exportPDFMois(team, shifts, year, month) {
   const rows = activeTeam.map(emp => {
     const {acquis,pris,restants} = calcCP(emp,shifts,season);
     const weekRows = weeks.map(({mon:wm,days}) => {
-      const wH = days.reduce((s,d)=>{if(d.getMonth()!==month-1)return s;const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+((sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")?(sh.h||0):0);},0);
+      const wH = days.reduce((s,d)=>{if(d.getMonth()!==month-1)return s;const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+(sh?.type==="travail"?(sh.h||0):0);},0);
       const cells = days.map(d=>{
         const ds=fmtLocal(d); const sh=shifts[`${emp.id}_${ds}`];
         const wrongM=d.getMonth()!==month-1; const hors=ds<emp.debut||ds>emp.fin;
@@ -5471,7 +5425,7 @@ function exportPDFMois(team, shifts, year, month) {
   }).join("");
 
   const monthH = activeTeam.map(emp=>{
-    let h=0;for(let i=1;i<=days;i++){const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;const sh=shifts[`${emp.id}_${ds}`];if(sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")h+=sh.h||0;}
+    let h=0;for(let i=1;i<=days;i++){const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;const sh=shifts[`${emp.id}_${ds}`];if(sh?.type==="travail")h+=sh.h||0;}
     return {emp,h};
   });
 
@@ -5893,7 +5847,7 @@ function exportPaie(team, shifts, year, month) {
   }).join("");
 
   const totalBrut = activeTeam.reduce((s,emp)=>{
-    let h=0;for(let i=1;i<=days;i++){const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;const sh=shifts[`${emp.id}_${ds}`];if(sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")h+=sh.h||0;}
+    let h=0;for(let i=1;i<=days;i++){const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;const sh=shifts[`${emp.id}_${ds}`];if(sh?.type==="travail")h+=sh.h||0;}
     return s+h*(parseFloat(emp.taux)||0);
   },0);
 
@@ -6157,7 +6111,7 @@ function PlanningEquipeTab({team,shifts,setShifts,calEvents={},setCalEvents=()=>
   const getShift=(eid,ds)=>shifts[`${eid}_${ds}`];
   const putShift=(eid,ds,data)=>{if(readonly)return;setShifts(p=>{const n={...p};data===null?delete n[`${eid}_${ds}`]:(n[`${eid}_${ds}`]=data);return n;});};
   const weekH=eid=>week.reduce((s,d)=>{return s+shH(getShift(eid,fmtLocal(d)));},0);
-  const dayH=d=>displayTeam.reduce((s,e)=>{const sh=getShift(e.id,fmtLocal(d));return s+((sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")?(sh.h||0):0);},0);
+  const dayH=d=>displayTeam.reduce((s,e)=>{const sh=getShift(e.id,fmtLocal(d));return s+(sh?.type==="travail"?(sh.h||0):0);},0);
   const weekLabel=()=>{const a=safeMon.toLocaleDateString("fr-FR",{day:"2-digit",month:"long"});const b=addDaysLocal(safeMon,6).toLocaleDateString("fr-FR",{day:"2-digit",month:"long",year:"numeric"});return `${a} → ${b}`;};
   const dtColor={mercredi:"#1565C0",weekend:"#BF360C",vacances:"#2E7D32"};
   const dtLabel={mercredi:"MER",weekend:"WE",vacances:"VAC"};
@@ -6272,7 +6226,7 @@ function PlanningEquipeTab({team,shifts,setShifts,calEvents={},setCalEvents=()=>
                         {sh?(<>
                           <span style={{fontSize:10,fontWeight:700,color:st.color,lineHeight:1.2}}>{st.label}</span>
                           {sh.type==="travail"&&sh.deb&&<span style={{fontSize:9,color:st.color}}>{sh.deb}–{sh.fin}</span>}
-                          {(sh.type==="travail"||sh.type==="conges"||sh.type==="ecole")&&sh.h>0&&<span style={{fontSize:11,fontWeight:800,color:st.color}}>{Number(sh.h).toFixed(1)}h</span>}
+                          {sh.type==="travail"&&sh.h>0&&<span style={{fontSize:11,fontWeight:800,color:st.color}}>{Number(sh.h).toFixed(1)}h</span>}
                           {sh.type==="retard"&&sh.hRetard>0&&<span style={{fontSize:9,color:st.color}}>-{sh.hRetard}h</span>}
                         </>):(<span style={{color:"#CCCCCC",fontSize:readonly?11:18}}>{readonly?"—":"+"}</span>)}
                       </div>
@@ -6430,7 +6384,7 @@ function MonPlanningTab({emp,shifts,setShifts}) {
   const m=monday.getMonth(),y=monday.getFullYear();
   const dayNames=["Di","Lu","Ma","Me","Je","Ve","Sa"];
 
-  const weekH=week.reduce((s,d)=>{const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+((sh?.type==="travail"||sh?.type==="conges"||sh?.type==="ecole")?(sh.h||0):0);},0);
+  const weekH=week.reduce((s,d)=>{const sh=shifts[`${emp.id}_${fmtLocal(d)}`];return s+(sh?.type==="travail"?(sh.h||0):0);},0);
   const monthH=(()=>{const days=new Date(y,m+1,0).getDate();let h=0;for(let i=1;i<=days;i++){const ds=`${y}-${String(m+1).padStart(2,"0")}-${String(i).padStart(2,"0")}`;h+=shH(shifts[`${emp.id}_${ds}`]);}return h;})();
   const {acquis,pris,restants}=calcCP(emp,shifts,{start:SEASON_START,end:SEASON_END});
   const saveComment=(ds,data)=>{setShifts(p=>({...p,[`${emp.id}_${ds}`]:data}));setCommenting(null);};
