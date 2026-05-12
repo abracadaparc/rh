@@ -1980,6 +1980,22 @@ contact@abracadaparc.fr`;
 
 </script>
 <script type="text/babel">
+// CACHE-BUSTING SHIFTS — si on est connecté en mode employee, vider le cache au moins
+// une fois après le déploiement du fix 12/05. Évite les divergences planning admin vs équipe.
+(function(){
+  try {
+    var FIX_VERSION = "fix-2026-05-12-shifts";
+    var lastApplied = localStorage.getItem("abr_fix_version");
+    var isEmployee = sessionStorage.getItem("abr_auth") === "employee";
+    if (isEmployee && lastApplied !== FIX_VERSION) {
+      localStorage.removeItem("abr_abr26_shifts_v4");
+      localStorage.removeItem("abr_abr26_team_v2");
+      localStorage.removeItem("abr_calEvents");
+      localStorage.setItem("abr_fix_version", FIX_VERSION);
+      console.log("[Cache-busting] Premiers chargement après fix 12/05 : caches vidés");
+    }
+  } catch(e) {}
+})();
 const { useState, useEffect, useRef, useCallback } = React;
 
 
@@ -7604,7 +7620,22 @@ function App() {
   },[sReady,tReady]);
 
   const loginAdmin    = ()=>{sessionStorage.setItem("abr_auth","admin");setAuthMode("admin");};
-  const loginEmployee = id=>{sessionStorage.setItem("abr_auth","employee");sessionStorage.setItem("abr_emp",id);setAuthMode("employee");setCurrentEmpId(id);};
+  const loginEmployee = id=>{
+    sessionStorage.setItem("abr_auth","employee");
+    sessionStorage.setItem("abr_emp",id);
+    // CACHE-BUSTING : côté salarié, vider le localStorage des shifts/team pour forcer
+    // une re-synchro complète depuis Firebase (évite d'afficher des vieux shifts cached)
+    try {
+      localStorage.removeItem("abr_abr26_shifts_v4");
+      localStorage.removeItem("abr_abr26_team_v2");
+      localStorage.removeItem("abr_calEvents");
+      console.log("[Login Salarié] Cache shifts/team vidé, rechargement Firebase forcé");
+    } catch(e) {}
+    setAuthMode("employee");
+    setCurrentEmpId(id);
+    // Recharger la page pour que les listeners Firebase repartent à zéro
+    setTimeout(()=>window.location.reload(), 100);
+  };
   const logout        = ()=>{sessionStorage.clear();setAuthMode("login");setCurrentEmpId(null);};
 
   // Vérifier si l'URL contient un lien magique Firebase → connexion automatique
