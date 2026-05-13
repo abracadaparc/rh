@@ -2070,20 +2070,20 @@ const TEAM_INIT = [
   {
     id:"t2", nom:"", prenom:"Aythann", color:"#00695C",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
-    debut:"2026-04-01", fin:"2026-11-02", heures_mois:104, taux:12.02,
+    debut:"2026-04-01", fin:"2026-11-02", heures_mois:121.33, taux:12.02,
     disponibilite:"Avr–Mai : WE seulement · Juin–Juil : complet · Août : S1–S2 · Sept–Nov : WE (à confirmer)",
     ecole_periodes:[],
-    poste:"Polyvalent", actif:true, note:"",
+    poste:"Polyvalent", actif:true, note:"Avenant 21/04/2026 : passage de 24h/sem (104h/mois) à 28h/sem (121,33h/mois).",
     ss:"", ddn:"", lieu_naissance:"", nationalite:"Française", adresse:"", cp_ville:"", tel:"", email:"",
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
   },
   {
     id:"t3", nom:"", prenom:"Alyssa", color:"#6A1B9A",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
-    debut:"2026-04-01", fin:"2026-06-21", heures_mois:80, taux:12.02,
+    debut:"2026-04-01", fin:"2026-06-21", heures_mois:76, taux:12.02,
     disponibilite:"MER + WE seulement. Sam : départ à 16h30. 3 avril : dispo à partir de 14h. Jours fériés : à confirmer 3 sem. avant.",
     ecole_periodes:[],
-    poste:"Polyvalente", actif:true, note:"",
+    poste:"Employée Polyvalente", actif:true, note:"CDD saisonnier 17h50/sem (76h/mois), niv. I éch. 1 coeff. 150 IDCC 1790. Période d'essai 11 jours. Fin contrat 21/06/2026 au soir.",
     ss:"", ddn:"", lieu_naissance:"", nationalite:"Française", adresse:"", cp_ville:"", tel:"", email:"",
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
   },
@@ -2102,10 +2102,10 @@ const TEAM_INIT = [
   {
     id:"t5", nom:"", prenom:"Florence", color:"#AD1457",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
-    debut:"2026-04-20", fin:"2026-11-02", heures_mois:120, taux:12.02,
-    disponibilite:"POEI validé ✅ — Formation France Travail du 1er au 19 avril inclus. Disponible à partir du 20 avril. Toute la saison. WE confirmés sept–nov. Toussaint confirmé.",
+    debut:"2026-04-25", fin:"2026-11-01", heures_mois:121.33, taux:12.02,
+    disponibilite:"POEI validé ✅ — Formation France Travail jusqu'au 19 avril inclus. Contrat saisonnier du 25/04 au 01/11. WE confirmés sept–nov. Toussaint confirmé.",
     ecole_periodes:["1–19 avril (POEI — hors entreprise)"],
-    poste:"Polyvalente Journée", actif:true, note:"",
+    poste:"Agent polyvalent", actif:true, note:"Contrat CDD saisonnier 28h/sem (121,33h/mois), niv. I éch. 1 coeff. 150 IDCC 1790. Période d'essai 1 mois.",
     ss:"", ddn:"", lieu_naissance:"", nationalite:"Française", adresse:"", cp_ville:"", tel:"", email:"",
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
     poei_debut:"2026-04-01", poei_fin:"2026-04-19", poei_organisme:"France Travail",
@@ -2798,7 +2798,6 @@ function EquipeTab({ team, setTeam }) {
             <div><label style={S.lbl}>Début</label><input type="date" value={form.debut} onChange={f("debut")} style={S.inp} /></div>
             <div><label style={S.lbl}>Fin</label><input type="date" value={form.fin} onChange={f("fin")} style={S.inp} /></div>
             <div><label style={S.lbl}>Heures/mois</label><input type="number" value={form.heures_mois} onChange={f("heures_mois")} style={S.inp} /></div>
-            <div><label style={S.lbl}>Heures moy/jour (CP)</label><input type="number" step="0.01" value={form.heures_jour||""} onChange={f("heures_jour")} placeholder={`auto ${form.heures_mois?(form.heures_mois/21.67).toFixed(2):"7"}`} style={S.inp} /></div>
             <div><label style={S.lbl}>Taux €/h</label><input type="number" step="0.01" value={form.taux} onChange={f("taux")} style={S.inp} /></div>
             <div style={{ gridColumn:"1/-1" }}><label style={S.lbl}>Disponibilité</label><textarea value={form.disponibilite} onChange={f("disponibilite")} style={{ ...S.inp, height:70, resize:"vertical" }} /></div>
             <div style={{ gridColumn:"1/-1" }}><label style={S.lbl}>Note interne</label><input value={form.note} onChange={f("note")} style={S.inp} /></div>
@@ -4924,20 +4923,87 @@ function calcCP(emp, shifts, season) {
 function calcMonthAlerts(team, shifts, year, month) {
   const alerts = [];
   const days = new Date(year, month, 0).getDate();
+  // Helper : moyenne réelle des heures travaillées (4 dernières semaines avant un jour donné)
+  const avgWorkedHoursPerDay = (empId, refDs) => {
+    const ref = new Date(refDs + "T12:00").getTime();
+    const minMs = ref - 28 * 86400000;
+    let total=0, cnt=0;
+    Object.keys(shifts).forEach(k => {
+      if (!k.startsWith(empId+"_")) return;
+      const ds = k.slice(empId.length+1);
+      const sh = shifts[k];
+      if (sh?.type !== "travail" || !sh?.h) return;
+      const t = new Date(ds + "T12:00").getTime();
+      if (t < minMs || t >= ref) return;
+      total += sh.h; cnt++;
+    });
+    return cnt > 0 ? total/cnt : 0;
+  };
+  // Helper : parse "HH:MM" → minutes depuis minuit
+  const toMin = (hhmm) => { const [h,m] = (hhmm||"00:00").split(":").map(Number); return h*60 + m; };
+
   team.filter(e=>e.actif).forEach(emp => {
-    let worked=0, retards=0, totalRetardH=0;
+    let worked=0, retards=0, totalRetardH=0, cpPosés=0;
+    let consecutive=0, alertedConsecutive=false;
+    let prevShift=null, prevDs=null;
     for (let i=1; i<=days; i++) {
       const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;
       const sh=shifts[`${emp.id}_${ds}`];
       if (sh?.type==="travail" || sh?.type==="conges" || sh?.type==="ecole") worked += sh.h||0;
+      if (sh?.type==="conges") cpPosés += sh.h||0;
       if (sh?.type==="retard") { retards++; totalRetardH += sh.hRetard||0; }
+
+      // ALERTE : repos quotidien 11h entre 2 jours travaillés (Code du travail Art. L3131-1)
+      if (sh?.type==="travail" && sh.deb && prevShift?.type==="travail" && prevShift.fin && prevDs) {
+        // Vérifier si jours strictement consécutifs (J+1)
+        const consecMs = new Date(ds+"T12:00").getTime() - new Date(prevDs+"T12:00").getTime();
+        if (Math.abs(consecMs - 86400000) < 3600000) {
+          const finMin = toMin(prevShift.fin); // fin J en min depuis minuit J
+          const debMin = toMin(sh.deb) + 1440; // début J+1 en min depuis minuit J
+          const reposMin = debMin - finMin;
+          if (reposMin < 660) { // 11h = 660 min
+            const heures = Math.floor(reposMin/60), mn = reposMin%60;
+            alerts.push({emp, type:"danger",
+              msg:`🚨 ${emp.prenom||emp.nom} : repos insuffisant entre ${prevDs} (fin ${prevShift.fin}) et ${ds} (début ${sh.deb}) — ${heures}h${String(mn).padStart(2,"0")} de repos (minimum légal 11h, Art. L3131-1)`});
+          }
+        }
+      }
+
+      // ALERTE : jours travaillés consécutifs (Code du travail : repos hebdo 35h après 6j)
+      if (sh?.type==="travail") {
+        consecutive++;
+        if (consecutive === 6 && !alertedConsecutive) {
+          alerts.push({emp, type:"warning",
+            msg:`⏰ ${emp.prenom||emp.nom} : 6 jours travaillés consécutifs jusqu'au ${ds} — repos hebdomadaire obligatoire avant 7ᵉ jour (35h consécutives, Code du travail)`});
+          alertedConsecutive = true;
+        }
+        if (consecutive >= 7) {
+          alerts.push({emp, type:"danger",
+            msg:`🚨 ${emp.prenom||emp.nom} : ${consecutive} jours travaillés consécutifs au ${ds} — INTERDIT (max 6j, repos 35h obligatoires)`});
+        }
+      } else {
+        consecutive = 0;
+        alertedConsecutive = false;
+      }
+      // Garder le shift précédent pour vérif repos J → J+1
+      if (sh) { prevShift = sh; prevDs = ds; }
     }
     const ratio = worked / emp.heures_mois;
     const nom = emp.prenom||emp.nom;
     if (ratio > 1.1) alerts.push({emp,type:"danger",
-      msg:`${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (+${(worked-emp.heures_mois).toFixed(1)}h) — heures sup à valider`});
+      msg:`${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (+${(worked-emp.heures_mois).toFixed(1)}h) — heures complémentaires à valider`});
     else if (ratio > 0.95 && ratio <= 1.1 && worked > 0) alerts.push({emp,type:"warning",
       msg:`${nom} : ${worked.toFixed(1)}h planifiées — proche du contrat (${emp.heures_mois}h)`});
+    else if (ratio < 0.9 && worked > 0 && cpPosés === 0) {
+      // SOUS-CONTRAT : suggérer pose CP OU ajout heures travail (modulation IDCC 1790)
+      const deficit = emp.heures_mois - worked;
+      // On utilise la VRAIE moyenne 4 semaines pour Phil propose de poser des CP cohérents
+      const refDs = `${year}-${String(month).padStart(2,"0")}-01`;
+      const heuresJour = avgWorkedHoursPerDay(emp.id, refDs) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
+      const joursCP = Math.ceil(deficit / heuresJour);
+      alerts.push({emp,type:"info",
+        msg:`💡 ${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (−${deficit.toFixed(1)}h) — soit poser ~${joursCP} jour${joursCP>1?"s":""} CP (${heuresJour.toFixed(1)}h/j), soit planifier ${deficit.toFixed(1)}h de travail en plus`});
+    }
     // Retard alerts
     if (retards >= 3) alerts.push({emp,type:"danger",retards,totalRetardH,
       msg:`🚨 ${nom} : ${retards} retards ce mois (${totalRetardH.toFixed(1)}h perdues) — entretien recommandé`});
@@ -5109,14 +5175,48 @@ function shH(sh) {
   return 0;
 }
 
-function ShiftModal({emp,date,shift,onSave,onClose}) {
+function ShiftModal({emp,date,shift,shifts,onSave,onClose}) {
   const inPoei=(emp.poei_debut&&emp.poei_fin&&date>=emp.poei_debut&&date<=emp.poei_fin);const [type,setType]=useState(shift?.type||(inPoei?"poei":"travail"));
   const [deb,setDeb]=useState(shift?.deb||"09:30");
   const [fin,setFin]=useState(shift?.fin||"17:00");
   const [note,setNote]=useState(shift?.note||"");
   const [hRetard,setHRetard]=useState(shift?.hRetard||0);
-  // Heures moyennes/jour pour CP (option A : modulation IDCC 1790)
-  const defaultCpH = parseFloat(emp.heures_jour) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
+
+  // ═════════════════════════════════════════════════════════════
+  // CP heures : calcul dynamique selon IDCC 1790 (maintien de salaire)
+  // 1. Si un shift "travail" existait déjà ce jour → on prend ses heures (le shift initial)
+  // 2. Sinon → moyenne des heures travaillées sur les 4 dernières semaines (jours travaillés uniquement)
+  // 3. Sinon → fallback heures_mois / 21.67 (jours ouvrés moyens du mois)
+  // ═════════════════════════════════════════════════════════════
+  const computeCpHDefault = () => {
+    // Cas 1 : un shift travail était initialement planifié ce jour
+    if (shift?.type === "travail" && shift?.h > 0) return shift.h;
+    // Cas 2 : moyenne 4 semaines (jours travaillés uniquement)
+    if (shifts) {
+      const ref = new Date(date + "T12:00");
+      const minMs = ref.getTime() - 28 * 86400000;
+      let totalH = 0, daysCount = 0;
+      Object.keys(shifts).forEach(k => {
+        if (!k.startsWith(emp.id + "_")) return;
+        const ds = k.slice(emp.id.length + 1);
+        const sh = shifts[k];
+        if (sh?.type !== "travail" || !sh?.h) return;
+        const t = new Date(ds + "T12:00").getTime();
+        if (t < minMs || t >= ref.getTime()) return;
+        totalH += sh.h;
+        daysCount++;
+      });
+      if (daysCount > 0) return Math.round((totalH / daysCount) * 10) / 10;
+    }
+    // Cas 3 : fallback contractuel
+    return Math.round(((parseFloat(emp.heures_mois) || 0) / 21.67 || 7) * 10) / 10;
+  };
+  const defaultCpH = computeCpHDefault();
+  // Mémo : explication de la source du calcul affichée à l'utilisateur
+  const cpHSource =
+    (shift?.type === "travail" && shift?.h > 0) ? `shift ${shift.h}h initialement planifié`
+    : (defaultCpH !== Math.round(((parseFloat(emp.heures_mois)||0)/21.67 || 7) * 10) / 10) ? "moyenne 4 dernières semaines travaillées"
+    : "fallback : heures_mois / 21,67";
   const [cpH,setCpH] = useState(shift?.type==="conges" ? (parseFloat(shift?.h)||defaultCpH) : defaultCpH);
   const calcH=(d,f)=>{const[dh,dm]=[...d.split(":").map(Number)],[fh,fm]=[...f.split(":").map(Number)];const tot=fh*60+fm-(dh*60+dm);return tot<=0?0:Math.round((tot-30)/60*100)/100;};
   const h=calcH(deb,fin); const is1Mai=date==="2026-05-01";
@@ -5148,7 +5248,7 @@ function ShiftModal({emp,date,shift,onSave,onClose}) {
             <label style={S.lbl}>Heures CP à payer</label>
             <input type="number" step="0.01" value={cpH} onChange={e=>setCpH(parseFloat(e.target.value)||0)} style={S.inp}/>
             <div style={{fontSize:11,color:"#9E9E9E",marginTop:2}}>
-              Auto : {defaultCpH.toFixed(2)}h {emp.heures_jour?"(fiche salarié)":"(heures_mois/21,67)"}
+              Calcul auto : <strong>{defaultCpH.toFixed(2)}h</strong> ({cpHSource})
             </div>
           </div>
           <div style={{background:"#FFF3E0",borderRadius:8,padding:"7px 12px",textAlign:"center",fontSize:12,color:"#E65100",marginBottom:8}}>
@@ -5204,15 +5304,24 @@ function AlertesBanner({team,shifts}) {
   const now=new Date(); const m=now.getMonth()+1, y=now.getFullYear();
   const alerts=calcMonthAlerts(team,shifts,y,m);
   if(!alerts.length) return null;
+  // Style par type d'alerte
+  const STYLE = {
+    danger:  { bg:"#FFEBEE", border:"#FFCDD2", color:"#C62828", icon:"🚨" },
+    warning: { bg:"#FFF8E1", border:"#FFE082", color:"#E65100", icon:"⚠️" },
+    info:    { bg:"#E3F2FD", border:"#BBDEFB", color:"#0D47A1", icon:"💡" },
+  };
   return (
     <div style={{marginBottom:16}}>
-      {alerts.map((a,i)=>(
-        <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderRadius:10,marginBottom:4,
-          background:a.type==="danger"?"#FFEBEE":"#FFF8E1",border:`1px solid ${a.type==="danger"?"#FFCDD2":"#FFE082"}`}}>
-          <span style={{fontSize:16}}>{a.type==="danger"?"🚨":"⚠️"}</span>
-          <span style={{fontSize:12,color:a.type==="danger"?"#C62828":"#E65100",fontWeight:600}}>{a.msg}</span>
-        </div>
-      ))}
+      {alerts.map((a,i)=>{
+        const s = STYLE[a.type] || STYLE.warning;
+        return (
+          <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderRadius:10,marginBottom:4,
+            background:s.bg,border:`1px solid ${s.border}`}}>
+            <span style={{fontSize:16}}>{s.icon}</span>
+            <span style={{fontSize:12,color:s.color,fontWeight:600}}>{a.msg}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -6395,7 +6504,7 @@ function PlanningEquipeTab({team,shifts,setShifts,calEvents={},setCalEvents=()=>
         </div>
       )}
 
-      {editing&&(()=>{const emp=team.find(e=>e.id===editing.empId);const sh=getShift(editing.empId,editing.date);return <ShiftModal emp={emp} date={editing.date} shift={sh} onSave={data=>{putShift(editing.empId,editing.date,data);setEditing(null);}} onClose={()=>setEditing(null)}/>;})()}
+      {editing&&(()=>{const emp=team.find(e=>e.id===editing.empId);const sh=getShift(editing.empId,editing.date);return <ShiftModal emp={emp} date={editing.date} shift={sh} shifts={shifts} onSave={data=>{putShift(editing.empId,editing.date,data);setEditing(null);}} onClose={()=>setEditing(null)}/>;})()}
 
       {calEventModal&&!readonly&&(function(){var ds=calEventModal.date;var evts=Array.isArray(calEvents[ds])?calEvents[ds]:[];return <CalEventModal date={ds} events={evts} onSave={function(u){var n=Object.assign({},calEvents);if(u.length===0){delete n[ds];}else{n[ds]=u;}setCalEvents(n);setCalEventModal(null);}} onClose={function(){setCalEventModal(null);}} />;})()}
     </div>
@@ -7051,7 +7160,7 @@ function AdminMonthView({team, shifts, setShifts, calEvents={}, setCalEvents=()=
       {editing&&(()=>{
         const emp2=team.find(e=>e.id===editing.empId);
         const sh=getShift(editing.empId,editing.date);
-        return <ShiftModal emp={emp2} date={editing.date} shift={sh}
+        return <ShiftModal emp={emp2} date={editing.date} shift={sh} shifts={shifts}
           onSave={data=>{putShift(editing.empId,editing.date,data);setEditing(null);}}
           onClose={()=>setEditing(null)}/>;
       })()}
