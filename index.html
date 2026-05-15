@@ -2249,6 +2249,30 @@ function useStorage(key, init) {
 
   const save = useCallback(v => {
     const next = typeof v==="function" ? v(ref.current) : v;
+    // ═════════════════════════════════════════════════════════════
+    // GARDE-FOU 15/05/2026 — Empêche l'écrasement massif de Firebase.
+    // Cause d'incident (14 mai matin, ré-écrasement 15 mai après-midi) :
+    // un état React local "shifts" anormalement petit (cache stale, race condition)
+    // pouvait écraser un Firebase qui contenait 700+ shifts.
+    // RÈGLE : si on essaie d'écrire moins de 50% du nombre d'entrées de la
+    // dernière valeur reçue de Firebase pour ce shift, on BLOQUE et on alerte.
+    // ═════════════════════════════════════════════════════════════
+    if (key === "abr26_shifts_v4" || key === "abr26_team_v2" || key === "abr26_cal_events") {
+      const prevCount = typeof ref.current === "object" && ref.current ? Object.keys(ref.current).length : 0;
+      const nextCount = typeof next === "object" && next ? Object.keys(next).length : 0;
+      // Tolère les vidanges complètes intentionnelles (next = {} alors qu'on partait de >0)
+      // SEULEMENT si l'app a moins de 50 entrées (premier setup) — sinon on protège
+      if (prevCount > 50 && nextCount < prevCount * 0.5) {
+        console.error(`[GARDE-FOU 15/05] Écriture ${key} BLOQUÉE : tentative d'écraser ${prevCount} entrées par seulement ${nextCount}. Probable cache stale ou race condition.`);
+        // Affiche un toast visible si possible
+        try {
+          if (typeof window.abr_toast === "function") {
+            window.abr_toast(`⚠️ Écriture bloquée (garde-fou) : ${prevCount}→${nextCount}`, "error");
+          }
+        } catch (e) {}
+        return; // NE PAS ÉCRIRE
+      }
+    }
     ref.current = next; setVal(next);
     try { localStorage.setItem(key, JSON.stringify(next)); } catch {}
     fbSave(key, JSON.stringify(next));
