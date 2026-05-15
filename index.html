@@ -1980,19 +1980,22 @@ contact@abracadaparc.fr`;
 
 </script>
 <script type="text/babel">
-// CACHE-BUSTING SHIFTS — si on est connecté en mode employee, vider le cache au moins
-// une fois après le déploiement du fix 12/05. Évite les divergences planning admin vs équipe.
+// CACHE-BUSTING SHIFTS — vider le cache au premier chargement après un déploiement,
+// TOUS rôles confondus (admin ET employé). Évite que Safari/Chrome serve un vieux
+// localStorage périmé après une migration côté Firebase.
+// Incident 14 mai 2026 : Safari admin a affiché un planning d'avant-migration parce que
+// le cache-busting ne s'appliquait qu'au flow loginEmployee.
 (function(){
   try {
-    var FIX_VERSION = "fix-2026-05-12-shifts";
+    var FIX_VERSION = "fix-2026-05-14-shifts-admin-v2-keys";
     var lastApplied = localStorage.getItem("abr_fix_version");
-    var isEmployee = sessionStorage.getItem("abr_auth") === "employee";
-    if (isEmployee && lastApplied !== FIX_VERSION) {
-      localStorage.removeItem("abr_abr26_shifts_v4");
-      localStorage.removeItem("abr_abr26_team_v2");
-      localStorage.removeItem("abr_calEvents");
+    if (lastApplied !== FIX_VERSION) {
+      // Clés RÉELLEMENT utilisées par useStorage (sans préfixe abr_, et abr26_cal_events pour calendrier)
+      localStorage.removeItem("abr26_shifts_v4");
+      localStorage.removeItem("abr26_team_v2");
+      localStorage.removeItem("abr26_cal_events");
       localStorage.setItem("abr_fix_version", FIX_VERSION);
-      console.log("[Cache-busting] Premiers chargement après fix 12/05 : caches vidés");
+      console.log("[Cache-busting 14/05] Caches shifts/team/calEvents vidés — Firebase = source de vérité.");
     }
   } catch(e) {}
 })();
@@ -4939,29 +4942,26 @@ function calcMonthAlerts(team, shifts, year, month) {
     });
     return cnt > 0 ? total/cnt : 0;
   };
-  // Helper : parse "HH:MM" → minutes depuis minuit
   const toMin = (hhmm) => { const [h,m] = (hhmm||"00:00").split(":").map(Number); return h*60 + m; };
 
   team.filter(e=>e.actif).forEach(emp => {
-    let worked=0, retards=0, totalRetardH=0, cpPosés=0;
+    let worked=0, retards=0, totalRetardH=0;
     let consecutive=0, alertedConsecutive=false;
     let prevShift=null, prevDs=null;
     for (let i=1; i<=days; i++) {
       const ds=`${year}-${String(month).padStart(2,"0")}-${String(i).padStart(2,"0")}`;
       const sh=shifts[`${emp.id}_${ds}`];
       if (sh?.type==="travail" || sh?.type==="conges" || sh?.type==="ecole") worked += sh.h||0;
-      if (sh?.type==="conges") cpPosés += sh.h||0;
       if (sh?.type==="retard") { retards++; totalRetardH += sh.hRetard||0; }
 
       // ALERTE : repos quotidien 11h entre 2 jours travaillés (Code du travail Art. L3131-1)
       if (sh?.type==="travail" && sh.deb && prevShift?.type==="travail" && prevShift.fin && prevDs) {
-        // Vérifier si jours strictement consécutifs (J+1)
         const consecMs = new Date(ds+"T12:00").getTime() - new Date(prevDs+"T12:00").getTime();
         if (Math.abs(consecMs - 86400000) < 3600000) {
-          const finMin = toMin(prevShift.fin); // fin J en min depuis minuit J
-          const debMin = toMin(sh.deb) + 1440; // début J+1 en min depuis minuit J
+          const finMin = toMin(prevShift.fin);
+          const debMin = toMin(sh.deb) + 1440;
           const reposMin = debMin - finMin;
-          if (reposMin < 660) { // 11h = 660 min
+          if (reposMin < 660) {
             const heures = Math.floor(reposMin/60), mn = reposMin%60;
             alerts.push({emp, type:"danger",
               msg:`🚨 ${emp.prenom||emp.nom} : repos insuffisant entre ${prevDs} (fin ${prevShift.fin}) et ${ds} (début ${sh.deb}) — ${heures}h${String(mn).padStart(2,"0")} de repos (minimum légal 11h, Art. L3131-1)`});
@@ -4969,12 +4969,14 @@ function calcMonthAlerts(team, shifts, year, month) {
         }
       }
 
-      // ALERTE : jours travaillés consécutifs (Code du travail : repos hebdo 35h après 6j)
+      // ALERTE : jours travaillés consécutifs
+      // 6 jours = info (rappel : c'est le max légal, attention au 7e)
+      // 7+ jours = danger (interdit)
       if (sh?.type==="travail") {
         consecutive++;
         if (consecutive === 6 && !alertedConsecutive) {
-          alerts.push({emp, type:"warning",
-            msg:`⏰ ${emp.prenom||emp.nom} : 6 jours travaillés consécutifs jusqu'au ${ds} — repos hebdomadaire obligatoire avant 7ᵉ jour (35h consécutives, Code du travail)`});
+          alerts.push({emp, type:"info",
+            msg:`⏰ ${emp.prenom||emp.nom} : 6ᵉ jour consécutif jusqu'au ${ds} (maximum légal atteint) — pas de 7ᵉ jour sans repos hebdomadaire 35h avant`});
           alertedConsecutive = true;
         }
         if (consecutive >= 7) {
@@ -4985,29 +4987,62 @@ function calcMonthAlerts(team, shifts, year, month) {
         consecutive = 0;
         alertedConsecutive = false;
       }
-      // Garder le shift précédent pour vérif repos J → J+1
       if (sh) { prevShift = sh; prevDs = ds; }
     }
+
+    // ─── Bilan heures contrat ───────────────────────────────────
+    // Seuils recalibrés pour modulation IDCC 1790 (saison 2026) :
+    //   > 110% → danger (heures comp à valider)
+    //   90-110% → silence (zone normale modulation)
+    //   85-90% → info (léger déficit)
+    //   < 85%  → danger (gros déficit, action obligatoire)
     const ratio = worked / emp.heures_mois;
     const nom = emp.prenom||emp.nom;
-    if (ratio > 1.1) alerts.push({emp,type:"danger",
-      msg:`${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (+${(worked-emp.heures_mois).toFixed(1)}h) — heures complémentaires à valider`});
-    else if (ratio > 0.95 && ratio <= 1.1 && worked > 0) alerts.push({emp,type:"warning",
-      msg:`${nom} : ${worked.toFixed(1)}h planifiées — proche du contrat (${emp.heures_mois}h)`});
-    else if (ratio < 0.9 && worked > 0 && cpPosés === 0) {
-      // SOUS-CONTRAT : suggérer pose CP OU ajout heures travail (modulation IDCC 1790)
+    // CP restants (acquis ‒ posés) sur la saison
+    let cpRestants = 0;
+    try {
+      const cp = calcCP(emp, shifts, {start: SEASON_START, end: SEASON_END});
+      cpRestants = cp.restants || 0;
+    } catch(e) { /* fallback : 0 */ }
+
+    if (ratio > 1.1) {
+      alerts.push({emp, type:"danger",
+        msg:`🚨 ${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (+${(worked-emp.heures_mois).toFixed(1)}h) — heures complémentaires à valider`});
+    }
+    else if (ratio >= 0.85 && ratio < 0.9 && worked > 0) {
+      // Léger déficit (8-15h selon contrat)
       const deficit = emp.heures_mois - worked;
-      // On utilise la VRAIE moyenne 4 semaines pour Phil propose de poser des CP cohérents
       const refDs = `${year}-${String(month).padStart(2,"0")}-01`;
       const heuresJour = avgWorkedHoursPerDay(emp.id, refDs) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
-      const joursCP = Math.ceil(deficit / heuresJour);
-      alerts.push({emp,type:"info",
-        msg:`💡 ${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (−${deficit.toFixed(1)}h) — soit poser ~${joursCP} jour${joursCP>1?"s":""} CP (${heuresJour.toFixed(1)}h/j), soit planifier ${deficit.toFixed(1)}h de travail en plus`});
+      if (cpRestants > 0) {
+        const joursCP = Math.min(cpRestants, Math.ceil(deficit / heuresJour));
+        alerts.push({emp, type:"info",
+          msg:`💡 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — léger déficit. Au choix : poser ~${joursCP}j CP (${cpRestants.toFixed(1)}j restants, ${heuresJour.toFixed(1)}h/j) OU ajouter ${deficit.toFixed(1)}h de travail`});
+      } else {
+        alerts.push({emp, type:"info",
+          msg:`💡 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — léger déficit. Plus de CP acquis → planifier ${deficit.toFixed(1)}h de travail en plus pour respecter le contrat`});
+      }
     }
+    else if (ratio < 0.85 && worked > 0) {
+      // Gros déficit : danger
+      const deficit = emp.heures_mois - worked;
+      const refDs = `${year}-${String(month).padStart(2,"0")}-01`;
+      const heuresJour = avgWorkedHoursPerDay(emp.id, refDs) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
+      if (cpRestants > 0) {
+        const joursCP = Math.min(cpRestants, Math.ceil(deficit / heuresJour));
+        alerts.push({emp, type:"danger",
+          msg:`🚨 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — GROS DÉFICIT. Action requise : poser ${joursCP}j CP (${cpRestants.toFixed(1)}j restants) ou ajouter ${deficit.toFixed(1)}h de travail`});
+      } else {
+        alerts.push({emp, type:"danger",
+          msg:`🚨 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — GROS DÉFICIT. ${nom} n'a plus de CP → planifier ${deficit.toFixed(1)}h de travail OBLIGATOIRE`});
+      }
+    }
+    // 90-110% : silence (zone normale modulation)
+
     // Retard alerts
-    if (retards >= 3) alerts.push({emp,type:"danger",retards,totalRetardH,
+    if (retards >= 3) alerts.push({emp, type:"danger", retards, totalRetardH,
       msg:`🚨 ${nom} : ${retards} retards ce mois (${totalRetardH.toFixed(1)}h perdues) — entretien recommandé`});
-    else if (retards === 2) alerts.push({emp,type:"warning",retards,
+    else if (retards === 2) alerts.push({emp, type:"warning", retards,
       msg:`⚠️ ${nom} : 2 retards ce mois — à surveiller (3 = alerte disciplinaire)`});
   });
   return alerts;
@@ -7704,9 +7739,25 @@ function App() {
   // Init SHA-256 hash on first load
   useEffect(()=>{initHash();},[]);
 
-  // Auto-fill shifts
+  // Auto-fill shifts — DÉSACTIVÉ DÉFINITIVEMENT le 14/05/2026.
+  // Cause d'incident (14 mai matin) : un onglet équipe qui se réveille du sommeil
+  // avec localStorage vidé voyait shifts={} avant que Firebase ait répondu, déclenchait
+  // generateDefaultShifts(team) → ÉCRASEMENT de Firebase avec les shifts par défaut.
+  // Le planning validé par Vanessa mercredi 20h a été ainsi perdu pendant la nuit.
+  // Le risque d'écrasement étant supérieur au confort de seed automatique, on désactive
+  // complètement cette logique. Si Firebase est vide pour de bon (vraie première install),
+  // Vanessa devra cliquer un bouton "Initialiser depuis defaults" qu'on ajoutera dans Paramètres.
   useEffect(()=>{
-    if(sReady&&tReady&&Object.keys(shifts).length===0&&team.length>0) setShifts(generateDefaultShifts(team));
+    // BLOCAGE PERMANENT — ne pas réactiver sans accord explicite après audit complet.
+    if (false && sReady && tReady && Object.keys(shifts).length === 0 && team.length > 0) {
+      setShifts(generateDefaultShifts(team));
+    }
+    // SAFETY NET 14/05 : si un onglet redémarre avec shifts vide ET Firebase a aussi vide,
+    // on ne fait RIEN — l'utilisateur verra une page vide et saura qu'il y a un problème,
+    // au lieu de voir un "faux planning" généré qui écraserait Firebase.
+    if (sReady && tReady && Object.keys(shifts).length === 0 && team.length > 0) {
+      console.warn("[Safety 14/05] shifts vide après chargement Firebase. AUCUNE auto-génération. Si tu vois ça, vérifie Firebase Console.");
+    }
   }, [sReady, tReady]);
 
   // Ctrl+Z global pour annuler la dernière modification de planning
@@ -7744,16 +7795,30 @@ function App() {
     if(Object.keys(updates).length>0) setShifts(p=>({...p,...updates}));
   },[sReady,tReady]);
 
-  const loginAdmin    = ()=>{sessionStorage.setItem("abr_auth","admin");setAuthMode("admin");};
+  const loginAdmin    = ()=>{
+    sessionStorage.setItem("abr_auth","admin");
+    // CACHE-BUSTING admin : même logique que loginEmployee pour empêcher
+    // l'écran "données périmées" (incident 14 mai 2026 — Safari servait un vieux localStorage).
+    try {
+      // Clés RÉELLEMENT utilisées par useStorage (sans préfixe abr_, et abr26_cal_events pour calendrier)
+      localStorage.removeItem("abr26_shifts_v4");
+      localStorage.removeItem("abr26_team_v2");
+      localStorage.removeItem("abr26_cal_events");
+      console.log("[Login Admin] Cache shifts/team/calEvents vidé, rechargement Firebase forcé");
+    } catch(e) {}
+    setAuthMode("admin");
+    setTimeout(()=>window.location.reload(), 100);
+  };
   const loginEmployee = id=>{
     sessionStorage.setItem("abr_auth","employee");
     sessionStorage.setItem("abr_emp",id);
     // CACHE-BUSTING : côté salarié, vider le localStorage des shifts/team pour forcer
     // une re-synchro complète depuis Firebase (évite d'afficher des vieux shifts cached)
     try {
-      localStorage.removeItem("abr_abr26_shifts_v4");
-      localStorage.removeItem("abr_abr26_team_v2");
-      localStorage.removeItem("abr_calEvents");
+      // Clés RÉELLEMENT utilisées par useStorage (sans préfixe abr_, et abr26_cal_events pour calendrier)
+      localStorage.removeItem("abr26_shifts_v4");
+      localStorage.removeItem("abr26_team_v2");
+      localStorage.removeItem("abr26_cal_events");
       console.log("[Login Salarié] Cache shifts/team vidé, rechargement Firebase forcé");
     } catch(e) {}
     setAuthMode("employee");
@@ -8463,7 +8528,10 @@ window._ptDebug = S;
 
   // ---- Surveillance de l'état de connexion Firebase ----
   function watchConnection() {
-    if (!window.firebase || !window.firebase.database) {
+    // FIX 14/05 — attendre que Firebase soit initialisé (firebase.apps.length > 0).
+    // Sans ça, firebase.database() plante en silence et la surveillance ne se met
+    // jamais en place → le force-reload watch ne déclenche jamais non plus.
+    if (!window.firebase || !window.firebase.database || !firebase.apps || firebase.apps.length === 0) {
       setTimeout(watchConnection, 200);
       return;
     }
@@ -8476,7 +8544,7 @@ window._ptDebug = S;
           setBanner('error', '🔴 Hors ligne — vos modifs ne s\'enregistrent PAS');
         }
       });
-      console.log('✅ Surveillance connexion Firebase active');
+      console.log('✅ Surveillance connexion Firebase active (post-init)');
     } catch (e) {
       console.error('Erreur watchConnection :', e);
       setTimeout(watchConnection, 1000);
@@ -8504,7 +8572,8 @@ window._ptDebug = S;
   // Un nœud /abracadaparc/abr_force_reload contient un timestamp.
   // Si Vanessa le met à jour, tous les clients connectés rechargent dans les 10 sec.
   function watchForceReload() {
-    if (!window.firebase || !window.firebase.database) {
+    // FIX 14/05 — attendre l'initialisation effective de Firebase.
+    if (!window.firebase || !window.firebase.database || !firebase.apps || firebase.apps.length === 0) {
       setTimeout(watchForceReload, 500);
       return;
     }
@@ -8516,8 +8585,14 @@ window._ptDebug = S;
         if (ts && ts > localKnown) {
           localStorage.setItem('abr_force_reload_seen', String(ts));
           if (localKnown !== 0) {
-            // C'est un changement après chargement initial → on recharge
-            console.log('Force-reload reçu, rechargement dans 2s');
+            console.log('Force-reload reçu, vidage cache + rechargement dans 2s');
+            // FIX 14/05 — vider le localStorage AVANT le reload, sinon le cache stale
+            // est servi à nouveau au reload.
+            try {
+              localStorage.removeItem("abr26_shifts_v4");
+              localStorage.removeItem("abr26_team_v2");
+              localStorage.removeItem("abr26_cal_events");
+            } catch(e) {}
             setTimeout(function () {
               var url = window.location.href.split('?')[0] + '?v=' + Date.now();
               window.location.href = url;
@@ -8525,12 +8600,13 @@ window._ptDebug = S;
           }
         }
       });
-    } catch (e) { /* non bloquant */ }
+      console.log('✅ Force-reload watcher actif (post-init)');
+    } catch (e) { console.error('Erreur watchForceReload :', e); }
   }
 
   // ---- API publique pour Vanessa : forcer le reload de tous les clients ----
   window.abrForceReloadEquipe = function () {
-    if (!window.firebase || !window.firebase.database) return alert('Firebase indispo');
+    if (!window.firebase || !window.firebase.database || !firebase.apps || firebase.apps.length === 0) return alert('Firebase indispo (init non terminée)');
     var ts = Date.now();
     window.firebase.database()
       .ref('abracadaparc/abr_force_reload')
