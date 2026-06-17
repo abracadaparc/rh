@@ -4,13 +4,20 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>AbracadaParc RH · Saison 2026</title>
+<!-- CDN : toutes les versions sont EPINGLEES.
+     Une version flottante (ex. @babel/standalone sans tag) peut casser l'app
+     du jour au lendemain quand le CDN publie une nouvelle release breaking.
+     Incident du 03/06/2026 : Babel a publie une version qui produit du JSX
+     contenant des `import` ESM -> Cannot use 'import' statement outside a module.
+     Resolu en pinnant @babel/standalone@7.26.4. Ne JAMAIS retirer le tag de version. -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:#F4F8F4;min-height:100vh}
@@ -3489,10 +3496,18 @@ function RecapECTab({ team, shifts }) {
         <div style={{ fontSize:12, color:"#E65100", marginBottom:12, lineHeight:1.7 }}>
           Document à transmettre avant le <strong>5 du mois</strong>. Format Excel détaillé (1 onglet par salarié + synthèse globale, modulation hebdo, règle MODE pour CP) — validé par le service paie.
         </div>
-        <div style={{ fontSize:11, fontWeight:700, color:"#BF360C", marginBottom:6 }}>📥 Excel détaillé (à envoyer au service social) :</div>
+        <div style={{ fontSize:11, fontWeight:700, color:"#1F4E5A", marginBottom:6 }}>🎨 Excel coloré (lisible, version ExcelJS) :</div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
           {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
-            <button key={`xlsx-${m}`} onClick={()=>exportPaieXLSX(team,shifts,2026,m)} style={{ ...S.btn, ...S.btnG, padding:"7px 12px", fontSize:11 }}>
+            <button key={"colored-" + m} onClick={()=>exportPaieColored(m,2026,team,shifts)} style={{ ...S.btn, background:"#2D7A8C", color:"#fff", border:"1px solid #1F4E5A", padding:"7px 12px", fontSize:11 }}>
+              🎨 {["","Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"][m]} 2026
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize:11, fontWeight:700, color:"#BF360C", marginBottom:6 }}>📥 Excel détaillé classique (SheetJS) :</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+          {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => (
+            <button key={"xlsx-" + m} onClick={()=>exportPaieXLSX(team,shifts,2026,m)} style={{ ...S.btn, ...S.btnG, padding:"7px 12px", fontSize:11 }}>
               📥 {["","Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"][m]} 2026
             </button>
           ))}
@@ -5644,6 +5659,673 @@ function exportPDFMois(team, shifts, year, month) {
   a.href = url; a.target = "_blank"; a.rel = "noopener";
   document.body.appendChild(a); a.click();
   setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);}, 1000);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── EXPORT PAIE COLORÉ (ExcelJS) — lisible service paie ──────────────────────
+// Palette pastel, bordures fines, freeze panes, conditional formatting modulation
+// Même règle CP (MODE) + même hebdo réf (heures_mois × 12 ÷ 52)
+// PAS de template literals imbriqués (concaténation uniquement)
+// ─────────────────────────────────────────────────────────────────────────────
+function exportPaieColored(month, year, employees, planning) {
+  if (typeof ExcelJS === "undefined") {
+    alert("Erreur : librairie ExcelJS non chargée. Réessaie dans quelques secondes.");
+    return;
+  }
+
+  var MOIS_NOMS = ["","Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+  var JOURS_FR = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
+  var FERIES_2026 = ["2026-01-01","2026-04-06","2026-05-01","2026-05-08","2026-05-14","2026-05-25","2026-07-14","2026-08-15","2026-11-01","2026-11-11","2026-12-25"];
+  var FERIES_MAJORES = ["2026-05-01"];
+
+  // ── Palette (codes hex sans préfixe FF) ──
+  var COL = {
+    TRAVAILLE:   "D4EDDA",
+    ECOLE:       "CCE5FF",
+    CP:          "FFF3CD",
+    FERIE:       "FFE5B4",
+    ABSENCE:     "F8D7DA",
+    MALADIE:     "E2D5F0",
+    POEI:        "D6D8DB",
+    REPOS:       "F1F3F5",
+    HORS:        "ECECEC",
+    HEADER_DARK: "1F4E5A",
+    HEADER_MED:  "2D7A8C",
+    WEEK_BAND:   "B8DBD9",
+    SYNTH_BAND:  "2D7A8C",
+    TOTAL_HIGH:  "FFE066",
+    TOTAL_WEEK:  "E8F4F8",
+    MOD_BAND:    "FFF8E1"
+  };
+  var BORDER_HEX = "BFBFBF";
+
+  // ── Helpers de style ──
+  var thinBorder = {
+    top:    { style: "thin", color: { argb: "FF" + BORDER_HEX } },
+    left:   { style: "thin", color: { argb: "FF" + BORDER_HEX } },
+    bottom: { style: "thin", color: { argb: "FF" + BORDER_HEX } },
+    right:  { style: "thin", color: { argb: "FF" + BORDER_HEX } }
+  };
+  function setFill(cell, hex) {
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF" + hex } };
+  }
+  function setBorders(cell) { cell.border = thinBorder; }
+  function pad2(n) { return String(n).padStart(2, "0"); }
+
+  // ── Mapping type → couleur (sous-chaîne, case-insensitive) ──
+  function colorForType(type) {
+    if (!type) return null;
+    var t = String(type).toLowerCase();
+    if (t.indexOf("travaillé") >= 0 || t.indexOf("travaille") >= 0 || t.indexOf("travail") >= 0) return COL.TRAVAILLE;
+    if (t.indexOf("école") >= 0 || t.indexOf("ecole") >= 0 || t.indexOf("form") >= 0) return COL.ECOLE;
+    if (t.indexOf("cp") >= 0 || t.indexOf("congé") >= 0 || t.indexOf("conge") >= 0) return COL.CP;
+    if (t.indexOf("malad") >= 0) return COL.MALADIE;
+    if (t.indexOf("poei") >= 0) return COL.POEI;
+    if (t.indexOf("absence") >= 0 || t.indexOf("absent") >= 0) return COL.ABSENCE;
+    if (t.indexOf("repos") >= 0) return COL.REPOS;
+    if (t.indexOf("hors") >= 0 || t.indexOf("non saisi") >= 0) return COL.HORS;
+    return null;
+  }
+
+  function typeLabel(t) {
+    var labels = {
+      travail: "Travaillé", repos: "Repos", conges: "CP", ecole: "École/Form.",
+      poei: "POEI", absent_inj: "Absence inj.", absent: "Absence", malade: "Maladie", retard: "Retard"
+    };
+    return labels[t] || (t || "—");
+  }
+
+  // ── Préparation données ──
+  var days = new Date(year, month, 0).getDate();
+  var ymStr = year + "-" + pad2(month);
+  var team = employees.filter(function(e){ return e.actif; });
+
+  var shiftsMois = {};
+  team.forEach(function(emp) {
+    shiftsMois[emp.id] = {};
+    for (var i = 1; i <= days; i++) {
+      var ds = ymStr + "-" + pad2(i);
+      var sh = planning[emp.id + "_" + ds];
+      if (sh) shiftsMois[emp.id][ds] = sh;
+    }
+  });
+
+  // ── Règle MODE pour CP ──
+  function modeHeuresJourSemaine(empId, pyWeekday) {
+    var heures = [];
+    Object.keys(shiftsMois[empId] || {}).forEach(function(ds) {
+      var sh = shiftsMois[empId][ds];
+      if (sh.type === "travail" || sh.type === "ecole") {
+        var d = new Date(ds + "T00:00:00");
+        var pw = (d.getDay() + 6) % 7;
+        if (pw === pyWeekday) {
+          var h = parseFloat(sh.h) || 0;
+          if (h > 0) heures.push(Math.round(h * 4) / 4);
+        }
+      }
+    });
+    if (heures.length === 0) return null;
+    var counts = {};
+    heures.forEach(function(h) { counts[h] = (counts[h] || 0) + 1; });
+    var maxCount = 0, mode = null;
+    Object.keys(counts).forEach(function(v) {
+      var vNum = parseFloat(v), c = counts[v];
+      if (c > maxCount || (c === maxCount && vNum > mode)) { maxCount = c; mode = vNum; }
+    });
+    return mode;
+  }
+  function cpHours(sh, empId, jourDate) {
+    var pw = (jourDate.getDay() + 6) % 7;
+    var m = modeHeuresJourSemaine(empId, pw);
+    if (m !== null) return m;
+    return parseFloat(sh.h) || 0;
+  }
+
+  // ── Création workbook + onglet Synthèse (placeholder, rempli plus tard) ──
+  var wb = new ExcelJS.Workbook();
+  wb.creator = "AbracadaParc RH";
+  wb.created = new Date();
+  var synthWs = wb.addWorksheet("📋 Synthèse paie");
+
+  var syntheseData = [];
+
+  // ── ONGLETS SALARIÉS ──
+  team.forEach(function(emp) {
+    if (!shiftsMois[emp.id] || Object.keys(shiftsMois[emp.id]).length === 0) return;
+
+    var nomComplet = ((emp.prenom || "").trim() + " " + (emp.nom || "").trim()).trim();
+    var rawNom = (emp.prenom || emp.nom || emp.id).split(/\s+/)[0];
+    var nomCourt = rawNom.replace(/[^a-zA-Z0-9_-]/g, "").substring(0, 31) || emp.id;
+
+    var hMois = parseFloat(emp.heures_mois) || 0;
+    var hebdoRef = hMois > 0 ? Math.round((hMois * 12 / 52) * 100) / 100 : 0;
+
+    var ws = wb.addWorksheet(nomCourt);
+
+    // Largeurs fiches : A=14, B=14, C=18, D=11, E=18, F=36, G=30
+    var widths = [14, 14, 18, 11, 18, 36, 30];
+    widths.forEach(function(w, i) { ws.getColumn(i + 1).width = w; });
+
+    // ── Ligne 1 : titre fiche ──
+    ws.mergeCells("A1:G1");
+    var t1 = ws.getCell("A1");
+    t1.value = "FICHE PAIE — " + nomComplet.toUpperCase();
+    t1.font = { name: "Calibri", size: 15, bold: true, color: { argb: "FFFFFFFF" } };
+    t1.alignment = { horizontal: "center", vertical: "middle" };
+    setFill(t1, COL.HEADER_DARK);
+    ws.getRow(1).height = 30;
+
+    // ── Ligne 2 : sous-titre contrat ──
+    ws.mergeCells("A2:G2");
+    var t2 = ws.getCell("A2");
+    t2.value = MOIS_NOMS[month] + " " + year + " — " + (emp.contrat || "");
+    t2.font = { name: "Calibri", size: 12, bold: true, italic: true, color: { argb: "FFFFFFFF" } };
+    t2.alignment = { horizontal: "center", vertical: "middle" };
+    setFill(t2, COL.HEADER_MED);
+    ws.getRow(2).height = 22;
+
+    // ── Lignes 4-8 : infos ──
+    var ddnStr = emp.ddn ? new Date(emp.ddn).toLocaleDateString("fr-FR") : "—";
+    var hMoisStr = (emp.heures_mois || 0) + " h";
+    var periodeStr = (emp.debut || "") + " → " + (emp.fin || "");
+    var infos = [
+      ["N° SS :", emp.ss || emp.nss || "—"],
+      ["Date de naissance :", ddnStr],
+      ["Heures contractuelles/mois :", hMoisStr],
+      ["Hebdo (réf. modulation) :", hebdoRef],
+      ["Période contrat :", periodeStr]
+    ];
+    infos.forEach(function(pair, idx) {
+      var rIdx = 4 + idx;
+      var ra = ws.getCell("A" + rIdx);
+      ra.value = pair[0];
+      ra.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FF1F4E5A" } };
+      ra.alignment = { horizontal: "left", vertical: "middle" };
+      var rb = ws.getCell("B" + rIdx);
+      rb.value = pair[1];
+      rb.font = { name: "Calibri", size: 11 };
+      rb.alignment = { horizontal: "left", vertical: "middle" };
+      ws.getRow(rIdx).height = 18;
+    });
+    // B7 = hebdo réf, format heures (référencée dans toutes les formules modulation)
+    ws.getCell("B7").numFmt = '0.00" h"';
+
+    // ── Construction blocs hebdo à partir de la ligne 10 ──
+    var currentRow = 10;
+
+    // Groupes semaines ISO
+    var semaines = {};
+    for (var i = 1; i <= days; i++) {
+      var d = new Date(year, month - 1, i);
+      var target = new Date(d);
+      target.setHours(0, 0, 0, 0);
+      target.setDate(target.getDate() + 3 - ((target.getDay() + 6) % 7));
+      var week1 = new Date(target.getFullYear(), 0, 4);
+      var weekNum = Math.round(((target - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7) + 1;
+      var key = target.getFullYear() + "-W" + pad2(weekNum);
+      if (!semaines[key]) semaines[key] = { num: weekNum, jours: [] };
+      semaines[key].jours.push(d);
+    }
+
+    var sortedKeys = Object.keys(semaines).sort();
+    var weekTotalRows = []; // lignes Total semaine (pour cumul modulation)
+
+    // Compteurs synthèse
+    var total_h_travail = 0, total_h_cp = 0, total_h_ecole = 0;
+    var total_h_poei = 0, total_h_absent = 0, total_h_malade = 0;
+    var nb_travail_j = 0, nb_cp_j = 0, nb_repos_j = 0;
+    var nb_absent_j = 0, nb_malade_j = 0, nb_ecole_j = 0;
+    var nb_poei_j = 0, nb_ferie_travaille = 0;
+
+    sortedKeys.forEach(function(key) {
+      var sem = semaines[key];
+      var startD = sem.jours[0], endD = sem.jours[sem.jours.length - 1];
+      var fmtDate = function(d) { return pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1); };
+
+      // ── Bandeau semaine ──
+      ws.mergeCells("A" + currentRow + ":G" + currentRow);
+      var bandCell = ws.getCell("A" + currentRow);
+      bandCell.value = "Semaine " + sem.num + " — " + fmtDate(startD) + " au " + fmtDate(endD);
+      bandCell.font = { name: "Calibri", size: 12, bold: true, color: { argb: "FF1F4E5A" } };
+      bandCell.alignment = { horizontal: "center", vertical: "middle" };
+      setFill(bandCell, COL.WEEK_BAND);
+      setBorders(bandCell);
+      ws.getRow(currentRow).height = 22;
+      currentRow++;
+
+      // ── En-têtes ──
+      var headers = ["Date", "Jour", "Type", "Heures", "Détail", "Note", "Férié"];
+      var headerRow = ws.getRow(currentRow);
+      headers.forEach(function(h, i) {
+        var cell = headerRow.getCell(i + 1);
+        cell.value = h;
+        cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        setFill(cell, COL.HEADER_MED);
+        setBorders(cell);
+      });
+      headerRow.height = 22;
+      currentRow++;
+
+      var firstDayRow = currentRow;
+
+      // ── Lignes jours ──
+      sem.jours.forEach(function(d) {
+        var ds = d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+        var dStr = pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + "/" + d.getFullYear();
+        var jourFr = JOURS_FR[(d.getDay() + 6) % 7];
+        var inPeriod = (!emp.debut || ds >= emp.debut) && (!emp.fin || ds <= emp.fin);
+        var sh = shiftsMois[emp.id][ds];
+        var ferie = FERIES_2026.indexOf(ds) >= 0;
+        var ferieMajore = FERIES_MAJORES.indexOf(ds) >= 0;
+
+        var typeStr = "", h = 0, detail = "", note = "";
+        if (!inPeriod) {
+          typeStr = "Hors contrat"; h = 0;
+        } else if (!sh) {
+          typeStr = "(non saisi)"; h = 0;
+        } else {
+          typeStr = typeLabel(sh.type);
+          h = parseFloat(sh.h) || 0;
+          var deb = sh.deb || sh.debut || "";
+          var fin = sh.fin || "";
+          detail = (deb && fin) ? (deb + "–" + fin) : "";
+          note = sh.note || "";
+
+          if (sh.type === "travail") {
+            total_h_travail += h; nb_travail_j++;
+            if (ferie) nb_ferie_travaille++;
+          } else if (sh.type === "conges") {
+            var hCp = cpHours(sh, emp.id, d);
+            h = hCp; total_h_cp += hCp; nb_cp_j++;
+          } else if (sh.type === "repos") nb_repos_j++;
+          else if (sh.type === "ecole") { total_h_ecole += h; nb_ecole_j++; }
+          else if (sh.type === "poei") { total_h_poei += h; nb_poei_j++; h = 0; }
+          else if (sh.type === "absent_inj" || sh.type === "absent") { total_h_absent += h; nb_absent_j++; h = 0; }
+          else if (sh.type === "malade") { total_h_malade += h; nb_malade_j++; }
+        }
+
+        var ferieLabel = ferieMajore ? "🟠 Férié 1er mai (majoré)" : (ferie ? "🟠 Férié" : "");
+        var rowColor = colorForType(typeStr);
+
+        var row = ws.getRow(currentRow);
+        row.getCell(1).value = dStr;
+        row.getCell(2).value = jourFr;
+        row.getCell(3).value = typeStr;
+        row.getCell(4).value = h;
+        row.getCell(4).numFmt = '0.00';
+        row.getCell(5).value = detail;
+        row.getCell(6).value = note;
+        row.getCell(7).value = ferieLabel;
+
+        for (var c = 1; c <= 7; c++) {
+          var cell = row.getCell(c);
+          cell.font = { name: "Calibri", size: 10 };
+          var hAlign = "left";
+          if (c === 2 || c === 3 || c === 7) hAlign = "center";
+          if (c === 4) hAlign = "right";
+          cell.alignment = { horizontal: hAlign, vertical: "middle", wrapText: (c === 6) };
+          setBorders(cell);
+          if (rowColor) setFill(cell, rowColor);
+        }
+        // Règle 2 : colonne G (Férié) override en orange uniquement si valeur
+        if (ferieLabel) setFill(row.getCell(7), COL.FERIE);
+        row.height = 20;
+        currentRow++;
+      });
+
+      var lastDayRow = currentRow - 1;
+
+      // ── Total semaine ──
+      ws.mergeCells("A" + currentRow + ":C" + currentRow);
+      var totalRow = ws.getRow(currentRow);
+      totalRow.getCell(1).value = "Total semaine " + sem.num;
+      totalRow.getCell(1).font = { name: "Calibri", size: 11, bold: true, color: { argb: "FF1F4E5A" } };
+      totalRow.getCell(1).alignment = { horizontal: "right", vertical: "middle" };
+      totalRow.getCell(4).value = { formula: "SUM(D" + firstDayRow + ":D" + lastDayRow + ")" };
+      totalRow.getCell(4).numFmt = '0.00';
+      totalRow.getCell(4).font = { name: "Calibri", size: 11, bold: true };
+      totalRow.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+      for (var c2 = 1; c2 <= 7; c2++) {
+        setFill(totalRow.getCell(c2), COL.TOTAL_WEEK);
+        setBorders(totalRow.getCell(c2));
+      }
+      weekTotalRows.push(currentRow);
+      totalRow.height = 20;
+      currentRow++;
+
+      // ── Modulation (écart) = Total - hebdo réf B7 ──
+      ws.mergeCells("A" + currentRow + ":C" + currentRow);
+      var modRow = ws.getRow(currentRow);
+      modRow.getCell(1).value = "Modulation (écart)";
+      modRow.getCell(1).font = { name: "Calibri", size: 10, italic: true, color: { argb: "FF705500" } };
+      modRow.getCell(1).alignment = { horizontal: "right", vertical: "middle" };
+      var modFormula = "D" + (currentRow - 1) + "-B7";
+      modRow.getCell(4).value = { formula: modFormula };
+      modRow.getCell(4).numFmt = '+0.00;-0.00;0.00';
+      modRow.getCell(4).font = { name: "Calibri", size: 10, italic: true, bold: true };
+      modRow.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+      for (var c3 = 1; c3 <= 7; c3++) {
+        setFill(modRow.getCell(c3), COL.MOD_BAND);
+        setBorders(modRow.getCell(c3));
+      }
+      ws.addConditionalFormatting({
+        ref: "D" + currentRow,
+        rules: [
+          { type: "cellIs", operator: "greaterThan", formulae: ["0"], priority: 1,
+            style: { font: { color: { argb: "FF1B5E20" }, bold: true, italic: true } } },
+          { type: "cellIs", operator: "lessThan", formulae: ["0"], priority: 2,
+            style: { font: { color: { argb: "FFC62828" }, bold: true, italic: true } } }
+        ]
+      });
+      modRow.height = 18;
+      currentRow++;
+
+      // Ligne vide entre semaines
+      currentRow++;
+    });
+
+    // ── Bandeau SYNTHÈSE PAIE ──
+    currentRow++;
+    ws.mergeCells("A" + currentRow + ":G" + currentRow);
+    var synthBand = ws.getCell("A" + currentRow);
+    synthBand.value = "═══ SYNTHÈSE PAIE — " + MOIS_NOMS[month].toUpperCase() + " " + year + " ═══";
+    synthBand.font = { name: "Calibri", size: 13, bold: true, color: { argb: "FFFFFFFF" } };
+    synthBand.alignment = { horizontal: "center", vertical: "middle" };
+    setFill(synthBand, COL.SYNTH_BAND);
+    setBorders(synthBand);
+    ws.getRow(currentRow).height = 26;
+    currentRow++;
+    currentRow++; // ligne vide
+
+    // ── Bloc heures (6 lignes) ──
+    var hoursBlock = [
+      ["Heures travaillées (réelles)",       Math.round(total_h_travail * 100) / 100, COL.TRAVAILLE],
+      ["Heures formation/école payées",      Math.round(total_h_ecole   * 100) / 100, COL.ECOLE],
+      ["Heures CP pris (à payer)",           Math.round(total_h_cp      * 100) / 100, COL.CP],
+      ["Heures maladie",                     Math.round(total_h_malade  * 100) / 100, COL.MALADIE],
+      ["Heures POEI (NON payées par AbracadaParc)", Math.round(total_h_poei * 100) / 100, COL.POEI],
+      ["Heures absences (NON payées)",       Math.round(total_h_absent  * 100) / 100, COL.ABSENCE]
+    ];
+    var firstHoursRow = currentRow;
+    hoursBlock.forEach(function(item) {
+      ws.mergeCells("A" + currentRow + ":C" + currentRow);
+      var r = ws.getRow(currentRow);
+      r.getCell(1).value = item[0];
+      r.getCell(1).font = { name: "Calibri", size: 11, bold: true };
+      r.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+      r.getCell(4).value = item[1];
+      r.getCell(4).numFmt = '0.00';
+      r.getCell(4).font = { name: "Calibri", size: 11 };
+      r.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+      for (var cc = 1; cc <= 7; cc++) {
+        setFill(r.getCell(cc), item[2]);
+        setBorders(r.getCell(cc));
+      }
+      r.height = 20;
+      currentRow++;
+    });
+
+    // ── TOTAL HEURES À RÉMUNÉRER ──
+    ws.mergeCells("A" + currentRow + ":C" + currentRow);
+    var totRem = ws.getRow(currentRow);
+    totRem.getCell(1).value = "═ TOTAL HEURES À RÉMUNÉRER ═";
+    totRem.getCell(1).font = { name: "Calibri", size: 12, bold: true };
+    totRem.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+    // travail + école + CP + maladie = 4 premières lignes du bloc
+    var fTotal = "D" + firstHoursRow + "+D" + (firstHoursRow + 1) + "+D" + (firstHoursRow + 2) + "+D" + (firstHoursRow + 3);
+    totRem.getCell(4).value = { formula: fTotal };
+    totRem.getCell(4).numFmt = '0.00';
+    totRem.getCell(4).font = { name: "Calibri", size: 12, bold: true };
+    totRem.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+    for (var cTR = 1; cTR <= 7; cTR++) {
+      setFill(totRem.getCell(cTR), COL.TOTAL_HIGH);
+      setBorders(totRem.getCell(cTR));
+    }
+    totRem.height = 24;
+    currentRow++;
+    currentRow++; // ligne vide
+
+    // ── Bloc jours ──
+    var daysBlock = [
+      ["Jours travaillés",         nb_travail_j, COL.TRAVAILLE],
+      ["Jours formation/école",    nb_ecole_j,   COL.ECOLE],
+      ["Jours CP",                 nb_cp_j,      COL.CP],
+      ["Jours repos",              nb_repos_j,   COL.REPOS],
+      ["Jours POEI (info)",        nb_poei_j,    COL.POEI],
+      ["Jours absence injustifiée", nb_absent_j, COL.ABSENCE],
+      ["Jours maladie",            nb_malade_j,  COL.MALADIE]
+    ];
+    if (nb_ferie_travaille > 0) {
+      daysBlock.push(["⚠️ Jours fériés travaillés (info, PAS de majoration sauf 1er mai)", nb_ferie_travaille, COL.FERIE]);
+    }
+    daysBlock.forEach(function(item) {
+      ws.mergeCells("A" + currentRow + ":C" + currentRow);
+      var r = ws.getRow(currentRow);
+      r.getCell(1).value = item[0];
+      r.getCell(1).font = { name: "Calibri", size: 11 };
+      r.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+      r.getCell(4).value = item[1];
+      r.getCell(4).font = { name: "Calibri", size: 11, bold: true };
+      r.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+      for (var cD = 1; cD <= 7; cD++) {
+        setFill(r.getCell(cD), item[2]);
+        setBorders(r.getCell(cD));
+      }
+      r.height = 20;
+      currentRow++;
+    });
+    currentRow++;
+
+    // ── Modulation cumulée mensuelle ──
+    if (weekTotalRows.length > 0) {
+      ws.mergeCells("A" + currentRow + ":C" + currentRow);
+      var modCum = ws.getRow(currentRow);
+      modCum.getCell(1).value = "📐 Modulation cumulée mensuelle";
+      modCum.getCell(1).font = { name: "Calibri", size: 11, bold: true, italic: true };
+      modCum.getCell(1).alignment = { horizontal: "left", vertical: "middle" };
+      // SUM des cellules modulation hebdo (chacune = ligne du Total + 1)
+      var modRefs = weekTotalRows.map(function(rNum) { return "D" + (rNum + 1); });
+      modCum.getCell(4).value = { formula: "SUM(" + modRefs.join(",") + ")" };
+      modCum.getCell(4).numFmt = '+0.00;-0.00;0.00';
+      modCum.getCell(4).font = { name: "Calibri", size: 11, bold: true, italic: true };
+      modCum.getCell(4).alignment = { horizontal: "right", vertical: "middle" };
+      for (var cMC = 1; cMC <= 7; cMC++) {
+        setFill(modCum.getCell(cMC), COL.MOD_BAND);
+        setBorders(modCum.getCell(cMC));
+      }
+      ws.addConditionalFormatting({
+        ref: "D" + currentRow,
+        rules: [
+          { type: "cellIs", operator: "greaterThan", formulae: ["0"], priority: 1,
+            style: { font: { color: { argb: "FF1B5E20" }, bold: true, italic: true } } },
+          { type: "cellIs", operator: "lessThan", formulae: ["0"], priority: 2,
+            style: { font: { color: { argb: "FFC62828" }, bold: true, italic: true } } }
+        ]
+      });
+      modCum.height = 22;
+    }
+
+    // Freeze panes : A10
+    ws.views = [{ state: "frozen", xSplit: 0, ySplit: 9 }];
+
+    // Données pour la synthèse globale
+    syntheseData.push({
+      nom: nomComplet,
+      contrat: emp.contrat || "",
+      h_contrat: parseFloat(emp.heures_mois) || 0,
+      hebdo: hebdoRef,
+      h_travail: Math.round(total_h_travail * 100) / 100,
+      h_ecole:   Math.round(total_h_ecole   * 100) / 100,
+      h_cp:      Math.round(total_h_cp      * 100) / 100,
+      h_malade:  Math.round(total_h_malade  * 100) / 100,
+      h_poei:    Math.round(total_h_poei    * 100) / 100,
+      h_absent:  Math.round(total_h_absent  * 100) / 100,
+      sheet_name: nomCourt
+    });
+  });
+
+  // ── ONGLET SYNTHÈSE — REMPLISSAGE ──
+  // Largeurs : A=36, B=28, C-J=11, K=16, L=14
+  var synthWidths = [36, 28, 11, 11, 11, 11, 11, 11, 11, 11, 16, 14];
+  synthWidths.forEach(function(w, i) { synthWs.getColumn(i + 1).width = w; });
+
+  // Ligne 1 : bannière
+  synthWs.mergeCells("A1:L1");
+  var banner = synthWs.getCell("A1");
+  banner.value = "🌿 ABRACADAPARC — EXPORT PAIE " + MOIS_NOMS[month].toUpperCase() + " " + year;
+  banner.font = { name: "Calibri", size: 15, bold: true, color: { argb: "FFFFFFFF" } };
+  banner.alignment = { horizontal: "center", vertical: "middle" };
+  setFill(banner, COL.HEADER_DARK);
+  synthWs.getRow(1).height = 32;
+
+  // Ligne 2 : sous-titre IDCC/SIRET
+  synthWs.mergeCells("A2:L2");
+  var sub1 = synthWs.getCell("A2");
+  sub1.value = "Document à transmettre au service paie · IDCC 1790 · SIRET 979 489 929";
+  sub1.font = { name: "Calibri", size: 11, italic: true, color: { argb: "FF1F4E5A" } };
+  sub1.alignment = { horizontal: "center", vertical: "middle" };
+  synthWs.getRow(2).height = 18;
+
+  // Ligne 3 : généré le
+  synthWs.mergeCells("A3:L3");
+  var sub2 = synthWs.getCell("A3");
+  sub2.value = "Généré le " + new Date().toLocaleDateString("fr-FR");
+  sub2.font = { name: "Calibri", size: 10, italic: true, color: { argb: "FF707070" } };
+  sub2.alignment = { horizontal: "center", vertical: "middle" };
+  synthWs.getRow(3).height = 16;
+
+  // Ligne 5 : en-têtes
+  var synthHeaders = ["Salarié","Contrat","H/mois contrat","Hebdo réf.","H travaillées","H école","H CP","H maladie","H POEI","H absences","TOTAL h à payer","Onglet"];
+  var hdr5 = synthWs.getRow(5);
+  synthHeaders.forEach(function(h, i) {
+    var cell = hdr5.getCell(i + 1);
+    cell.value = h;
+    cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    setFill(cell, COL.HEADER_MED);
+    setBorders(cell);
+  });
+  hdr5.height = 36;
+
+  // Lignes données à partir de la ligne 6
+  var firstDataRow = 6;
+  syntheseData.forEach(function(s, idx) {
+    var rNum = firstDataRow + idx;
+    var r = synthWs.getRow(rNum);
+    r.getCell(1).value  = s.nom;
+    r.getCell(2).value  = s.contrat;
+    r.getCell(3).value  = s.h_contrat;
+    r.getCell(4).value  = s.hebdo;
+    r.getCell(5).value  = s.h_travail;
+    r.getCell(6).value  = s.h_ecole;
+    r.getCell(7).value  = s.h_cp;
+    r.getCell(8).value  = s.h_malade;
+    r.getCell(9).value  = s.h_poei;
+    r.getCell(10).value = s.h_absent;
+    // TOTAL h à payer = travail + école + CP + maladie
+    r.getCell(11).value = { formula: "E" + rNum + "+F" + rNum + "+G" + rNum + "+H" + rNum };
+    r.getCell(12).value = "→ " + s.sheet_name;
+
+    for (var c = 1; c <= 12; c++) {
+      var cell = r.getCell(c);
+      cell.font = { name: "Calibri", size: 10 };
+      var hAlign = "center";
+      if (c === 1 || c === 2 || c === 12) hAlign = "left";
+      cell.alignment = { horizontal: hAlign, vertical: "middle" };
+      if (c >= 3 && c <= 11) cell.numFmt = '0.00';
+      setBorders(cell);
+      if (c === 11) {
+        setFill(cell, COL.TOTAL_HIGH);
+        cell.font = { name: "Calibri", size: 11, bold: true };
+      }
+    }
+    r.height = 20;
+  });
+
+  var lastDataRow = firstDataRow + syntheseData.length - 1;
+
+  // Ligne TOTAL ÉQUIPE
+  if (syntheseData.length > 0) {
+    var totRowNum = lastDataRow + 1;
+    var totRowEq = synthWs.getRow(totRowNum);
+    totRowEq.getCell(1).value = "TOTAL ÉQUIPE";
+    for (var ce = 5; ce <= 11; ce++) {
+      var colLetter = String.fromCharCode(64 + ce); // 5→E, 6→F, ...
+      totRowEq.getCell(ce).value = { formula: "SUM(" + colLetter + firstDataRow + ":" + colLetter + lastDataRow + ")" };
+    }
+    for (var ct = 1; ct <= 12; ct++) {
+      var cell = totRowEq.getCell(ct);
+      cell.font = { name: "Calibri", size: 11, bold: true, color: { argb: "FFFFFFFF" } };
+      var hAlign = "center";
+      if (ct === 1 || ct === 2 || ct === 12) hAlign = "left";
+      cell.alignment = { horizontal: hAlign, vertical: "middle" };
+      if (ct >= 3 && ct <= 11) cell.numFmt = '0.00';
+      setFill(cell, COL.HEADER_DARK);
+      setBorders(cell);
+    }
+    totRowEq.height = 24;
+  }
+
+  // ── Légende ──
+  var legendStart = lastDataRow + 3;
+  synthWs.mergeCells("A" + legendStart + ":L" + legendStart);
+  var legTitle = synthWs.getCell("A" + legendStart);
+  legTitle.value = "LÉGENDE & RÈGLES DE CALCUL";
+  legTitle.font = { name: "Calibri", size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+  legTitle.alignment = { horizontal: "center", vertical: "middle" };
+  setFill(legTitle, COL.HEADER_MED);
+  setBorders(legTitle);
+  synthWs.getRow(legendStart).height = 22;
+
+  var legendItems = [
+    ["✅ Heures travaillées",       "Heures effectives saisies dans le planning (pointage)", COL.TRAVAILLE],
+    ["📘 Heures école/formation",   "Apprentissage : temps de formation = temps de travail (à payer)", COL.ECOLE],
+    ["🌴 Heures CP",                "Valorisées au MODE des heures travaillées le même jour de la semaine dans le mois", COL.CP],
+    ["🏥 Heures maladie",           "Arrêt maladie déclaré", COL.MALADIE],
+    ["📚 Heures POEI",              "Formation France Travail/AFDAS : NON payées par AbracadaParc (info uniquement)", COL.POEI],
+    ["❌ Heures absences",          "Absences injustifiées : NON payées (déduites du salaire)", COL.ABSENCE],
+    ["💤 Repos",                    "Jours de repos hebdomadaires", COL.REPOS],
+    ["🟠 Jours fériés",             "Seul le 1er mai est majoré. Pâques, 8 mai, etc. : signalés mais payés en taux normal", COL.FERIE],
+    ["📐 Modulation",               "Écart entre heures réelles et hebdo de référence (heures_mois × 12 ÷ 52)", COL.MOD_BAND]
+  ];
+  legendItems.forEach(function(item, idx) {
+    var rNum = legendStart + 1 + idx;
+    synthWs.mergeCells("B" + rNum + ":L" + rNum);
+    var r = synthWs.getRow(rNum);
+    r.getCell(1).value = item[0];
+    r.getCell(1).font = { name: "Calibri", size: 11, bold: true };
+    r.getCell(1).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+    r.getCell(2).value = item[1];
+    r.getCell(2).font = { name: "Calibri", size: 10 };
+    r.getCell(2).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+    setFill(r.getCell(1), item[2]);
+    setBorders(r.getCell(1));
+    setBorders(r.getCell(2));
+    r.height = 22;
+  });
+
+  // Freeze panes synthèse : A6
+  synthWs.views = [{ state: "frozen", xSplit: 0, ySplit: 5 }];
+
+  // ── Téléchargement ──
+  var filename = "AbracadaParc_Paie_" + MOIS_NOMS[month] + "_" + year + ".xlsx";
+  wb.xlsx.writeBuffer().then(function(buf) {
+    var blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 1000);
+  }).catch(function(err) {
+    console.error("Erreur export paie coloré :", err);
+    alert("Erreur lors de l'export coloré : " + err.message);
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
