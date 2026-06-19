@@ -4728,23 +4728,56 @@ function getFbAuth() {
 }
 
 // Envoyer un lien magique par email (Email Link / Passwordless)
-async function envoyerLienMagique(email, nomSalarie) {
+async function verifierLienMagiqueURL() {
   const auth = getFbAuth();
-  if (!auth) return { ok: false, err: "Firebase Auth non disponible" };
-  const actionCodeSettings = {
-    url: window.location.href.split('?')[0], // URL de l'app sans paramètres
-    handleCodeInApp: true,
-  };
+  if (!auth) {
+    alert("Firebase Auth indisponible");
+    return null;
+  }
+
   try {
-    await auth.sendSignInLinkToEmail(email, actionCodeSettings);
-    // Sauvegarder l'email localement pour le retrouver au retour
-    localStorage.setItem('abr_invite_email', email);
-    localStorage.setItem('abr_invite_nom', nomSalarie || '');
-    return { ok: true };
-  } catch(e) {
-    return { ok: false, err: e.message || "Erreur envoi" };
+    const href = window.location.href;
+    console.log("Lien courant:", href);
+
+    if (!auth.isSignInWithEmailLink(href)) {
+      console.log("Pas reconnu comme lien magique Firebase");
+      return null;
+    }
+
+    let email = localStorage.getItem('abrinviteemail');
+    if (!email) {
+      email = window.prompt("Confirmez votre adresse email pour vous connecter :");
+    }
+    if (!email) {
+      alert("Aucun email saisi.");
+      return null;
+    }
+
+    email = email.trim().toLowerCase();
+    console.log("Tentative signInWithEmailLink avec :", email);
+
+    const result = await auth.signInWithEmailLink(email, href);
+
+    console.log("Connexion OK :", result.user);
+    localStorage.setItem("abr_auth_debug_last_user", JSON.stringify({
+      email: result.user?.email || "",
+      uid: result.user?.uid || "",
+      ts: new Date().toISOString()
+    }));
+
+    localStorage.removeItem('abrinviteemail');
+    window.history.replaceState({}, document.title, window.location.pathname);
+    alert("Connexion réussie : " + (result.user?.email || email));
+    return result.user;
+
+  } catch (e) {
+    console.error("Erreur signInWithEmailLink:", e);
+    alert("Erreur connexion lien magique : " + (e?.message || e));
+    return null;
   }
 }
+
+     
 
 // Vérifier si l'URL contient un lien magique et connecter automatiquement
 async function verifierLienMagiqueURL() {
