@@ -4728,6 +4728,45 @@ function getFbAuth() {
 }
 
 // Envoyer un lien magique par email (Email Link / Passwordless)
+async function envoyerLienMagique(email, nom = "") {
+  const auth = getFbAuth();
+  if (!auth) {
+    alert("Firebase Auth indisponible");
+    return { ok: false, err: "Firebase Auth indisponible" };
+  }
+
+  try {
+    const cleanEmail = String(email || "").trim().toLowerCase();
+    if (!cleanEmail) {
+      alert("Adresse email manquante");
+      return { ok: false, err: "Adresse email manquante" };
+    }
+
+    const actionCodeSettings = {
+      url: window.location.origin + window.location.pathname,
+      handleCodeInApp: true
+    };
+
+    await auth.sendSignInLinkToEmail(cleanEmail, actionCodeSettings);
+    localStorage.setItem("abrinviteemail", cleanEmail);
+
+    console.log("Lien magique envoyé à :", cleanEmail, nom ? "(" + nom + ")" : "");
+    alert("Lien magique envoyé à " + cleanEmail);
+    return { ok: true };
+
+  } catch (e) {
+    console.error("Erreur envoi lien magique:", e);
+
+    let msg = e?.message || String(e);
+    if (e?.code === "auth/quota-exceeded") {
+      msg = "Quota quotidien Firebase atteint. Réessaie demain ou utilise la connexion par mot de passe.";
+    }
+
+    alert("Erreur envoi lien magique : " + msg);
+    return { ok: false, err: msg };
+  }
+}
+
 async function verifierLienMagiqueURL() {
   const auth = getFbAuth();
   if (!auth) {
