@@ -4780,23 +4780,7 @@ async function verifierLienMagiqueURL() {
      
 
 // Vérifier si l'URL contient un lien magique et connecter automatiquement
-async function verifierLienMagiqueURL() {
-  const auth = getFbAuth();
-  if (!auth) return null;
-  try {
-    if (!auth.isSignInWithEmailLink(window.location.href)) return null;
-    let email = localStorage.getItem('abr_invite_email');
-    if (!email) {
-      email = window.prompt('Confirmez votre adresse email pour vous connecter :');
-      if (!email) return null;
-    }
-    const result = await auth.signInWithEmailLink(email, window.location.href);
-    localStorage.removeItem('abr_invite_email');
-    // Nettoyer l'URL
-    window.history.replaceState({}, document.title, window.location.pathname);
-    return result.user;
-  } catch(e) { return null; }
-}
+
 
 // Exposer pour utilisation dans React
 window.abr_envoyerLienMagique = envoyerLienMagique;
