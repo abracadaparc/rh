@@ -2078,13 +2078,21 @@ const TEAM_INIT = [
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:23,
   },
   {
-    id:"t2", nom:"", prenom:"Aythann", color:"#00695C",
+    id:"t2", nom:"OBERT", prenom:"Aythann", color:"#00695C",
     type:"saisonnier", contrat:"CDD Saisonnier Modulable",
-    debut:"2026-04-01", fin:"2026-11-02", heures_mois:121.33, taux:12.02,
-    disponibilite:"Avr–Mai : WE seulement · Juin–Juil : complet · Août : S1–S2 · Sept–Nov : WE (à confirmer)",
+    debut:"2026-04-04", fin:"2026-08-16", heures_mois:121.33, taux:12.02,
+    // PATCH 4 (26/06/2026) — Avenant signé le 21/04/2026 :
+    //   24h/sem (104h/mois) jusqu'au 20/04 inclus → 28h/sem (121,33h/mois) à partir du 21/04
+    //   Volume contractuel saison réel : 536,16h (avril mixte)
+    avenants:[
+      { date_effet:"2026-04-21", heures_mois_avant:104, heures_mois_apres:121.33,
+        motif:"Avenant signé 21/04/2026 : augmentation horaire saisonnière" }
+    ],
+    disponibilite:"Avr–Mai : WE seulement · Juin–Juil : complet · Août : S1–S2 · Fin 16/08/2026 (vacances famille fin août)",
     ecole_periodes:[],
-    poste:"Polyvalent", actif:true, note:"Avenant 21/04/2026 : passage de 24h/sem (104h/mois) à 28h/sem (121,33h/mois).",
-    ss:"", ddn:"", lieu_naissance:"", nationalite:"Française", adresse:"", cp_ville:"", tel:"", email:"",
+    poste:"Polyvalent", actif:true, note:"Avenant 21/04/2026 : passage de 24h/sem (104h/mois) à 28h/sem (121,33h/mois). Contrat fin 16/08. Possible nouveau CDD à partir du 1er WE septembre selon retour mail.",
+    ss:"", ddn:"2006-09-08", lieu_naissance:"BEAUMONT SUR OISE", nationalite:"Française",
+    adresse:"5 rue Désiré Martin", cp_ville:"95270 BELLEFONTAINE", tel:"", email:"",
     iban:"", bic:"", urgence_nom:"", urgence_tel:"", urgence_lien:"", cp_ajustement:0,
   },
   {
@@ -5085,54 +5093,84 @@ function calcMonthAlerts(team, shifts, year, month) {
       if (sh) { prevShift = sh; prevDs = ds; }
     }
 
-    // ─── Bilan heures contrat ───────────────────────────────────
-    // Seuils recalibrés pour modulation IDCC 1790 (saison 2026) :
-    //   > 110% → danger (heures comp à valider)
-    //   90-110% → silence (zone normale modulation)
-    //   85-90% → info (léger déficit)
-    //   < 85%  → danger (gros déficit, action obligatoire)
-    const ratio = worked / emp.heures_mois;
+    // ─── PATCH 5 (26/06/2026) — ALERTES BASÉES SUR CUMUL SAISON ────────────────
+    // AVANT : ratio mensuel (worked/h_mois). Faux en modulation IDCC 1790 saisonnier :
+    //         un mois isolé à +22h ne veut RIEN dire si déficits ailleurs compensent.
+    //         Risque : alerter à tort + induire en erreur le service paie.
+    // APRÈS : on calcule le CUMUL réalisé depuis début contrat vs CUMUL contractuel
+    //         (prorata avec gestion avenants[]). Alerter seulement si vraie marge dépassée.
+    // ────────────────────────────────────────────────────────────────────────────
     const nom = emp.prenom||emp.nom;
-    // CP restants (acquis ‒ posés) sur la saison
     let cpRestants = 0;
     try {
       const cp = calcCP(emp, shifts, {start: SEASON_START, end: SEASON_END});
       cpRestants = cp.restants || 0;
     } catch(e) { /* fallback : 0 */ }
 
-    if (ratio > 1.1) {
+    // Helper : heures contractuelles d'un jour donné, avec gestion avenants
+    const hContractuelJour = (emp, ds) => {
+      if (ds < emp.debut || ds > emp.fin) return 0;
+      let hMois = parseFloat(emp.heures_mois) || 0;
+      if (Array.isArray(emp.avenants)) {
+        for (const av of emp.avenants) {
+          if (ds >= av.date_effet) hMois = parseFloat(av.heures_mois_apres) || hMois;
+          else hMois = parseFloat(av.heures_mois_avant) || hMois;
+        }
+      }
+      return hMois / 30; // mensualisation 30j
+    };
+
+    // Cumul réalisé depuis début contrat jusqu'à fin du mois en cours
+    let workedSeason = 0;
+    let contractCumul = 0;
+    let volumeTotalSaison = 0;
+    const startY = parseInt(emp.debut.slice(0,4)), startM = parseInt(emp.debut.slice(5,7));
+    const endY = parseInt(emp.fin.slice(0,4)), endM = parseInt(emp.fin.slice(5,7));
+    // Loop tous les mois du contrat
+    for (let y = startY, m = startM; (y < endY) || (y === endY && m <= endM); m++, m > 12 ? (m = 1, y++) : null) {
+      const dim = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const ds = `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+        // Contractuel TOTAL saison
+        volumeTotalSaison += hContractuelJour(emp, ds);
+        // Si on est <= mois en cours → cumul réalisé + contractuel cumul
+        if (y < year || (y === year && m <= month)) {
+          contractCumul += hContractuelJour(emp, ds);
+          const sh = shifts[`${emp.id}_${ds}`];
+          if (sh) {
+            if (sh.type === "travail") workedSeason += parseFloat(sh.h) || 0;
+            else if (sh.type === "ecole") workedSeason += parseFloat(sh.h) || 0;
+            else if (sh.type === "conges") {
+              // Règle B : valoriser CP à h_mois/21.67 (cohérent avec PATCH 3)
+              const hMois = parseFloat(emp.heures_mois) || 0;
+              workedSeason += hMois > 0 ? Math.round((hMois/21.67)*100)/100 : (parseFloat(sh.h)||0);
+            }
+          }
+        }
+      }
+    }
+    const margeRestanteSaison = Math.round((volumeTotalSaison - workedSeason)*10)/10;
+    const deltaCumul = Math.round((workedSeason - contractCumul)*10)/10;
+
+    // ── ALERTES BASÉES SUR CUMUL SAISON (pas mois isolé) ───────────────────
+    if (margeRestanteSaison < -20) {
+      // VRAIES heures sup : on dépasse le volume total saison
       alerts.push({emp, type:"danger",
-        msg:`🚨 ${nom} : ${worked.toFixed(1)}h planifiées vs ${emp.heures_mois}h contrat (+${(worked-emp.heures_mois).toFixed(1)}h) — heures complémentaires à valider`});
+        msg:`🚨 ${nom} : CUMUL SAISON DÉPASSÉ — ${workedSeason.toFixed(1)}h réalisées vs ${volumeTotalSaison.toFixed(1)}h max contractuel (+${(-margeRestanteSaison).toFixed(1)}h à payer en heures sup)`});
+    } else if (margeRestanteSaison < 0) {
+      alerts.push({emp, type:"warning",
+        msg:`⚠️ ${nom} : marge saison limite — ${workedSeason.toFixed(1)}h vs ${volumeTotalSaison.toFixed(1)}h max. Marge restante : ${margeRestanteSaison.toFixed(1)}h. Surveiller mois restants.`});
+    } else if (deltaCumul > 30 && margeRestanteSaison > 0) {
+      // Mois en cours chargé mais saison OK
+      alerts.push({emp, type:"info",
+        msg:`💡 ${nom} : cumul +${deltaCumul.toFixed(1)}h vs contractuel CE MOIS, MAIS modulation saison OK (${margeRestanteSaison.toFixed(1)}h de marge jusqu'au ${emp.fin})`});
+    } else if (deltaCumul < -30 && worked > 0) {
+      // Déficit cumul saison important : Vanessa paie pour heures non faites
+      alerts.push({emp, type:"info",
+        msg:`💡 ${nom} : déficit cumulé ${deltaCumul.toFixed(1)}h (sous-utilisé). Marge restante : ${margeRestanteSaison.toFixed(1)}h. Possibilité de planifier plus d'heures sans risque heures sup.`});
     }
-    else if (ratio >= 0.85 && ratio < 0.9 && worked > 0) {
-      // Léger déficit (8-15h selon contrat)
-      const deficit = emp.heures_mois - worked;
-      const refDs = `${year}-${String(month).padStart(2,"0")}-01`;
-      const heuresJour = avgWorkedHoursPerDay(emp.id, refDs) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
-      if (cpRestants > 0) {
-        const joursCP = Math.min(cpRestants, Math.ceil(deficit / heuresJour));
-        alerts.push({emp, type:"info",
-          msg:`💡 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — léger déficit. Au choix : poser ~${joursCP}j CP (${cpRestants.toFixed(1)}j restants, ${heuresJour.toFixed(1)}h/j) OU ajouter ${deficit.toFixed(1)}h de travail`});
-      } else {
-        alerts.push({emp, type:"info",
-          msg:`💡 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — léger déficit. Plus de CP acquis → planifier ${deficit.toFixed(1)}h de travail en plus pour respecter le contrat`});
-      }
-    }
-    else if (ratio < 0.85 && worked > 0) {
-      // Gros déficit : danger
-      const deficit = emp.heures_mois - worked;
-      const refDs = `${year}-${String(month).padStart(2,"0")}-01`;
-      const heuresJour = avgWorkedHoursPerDay(emp.id, refDs) || (parseFloat(emp.heures_mois)||0)/21.67 || 7;
-      if (cpRestants > 0) {
-        const joursCP = Math.min(cpRestants, Math.ceil(deficit / heuresJour));
-        alerts.push({emp, type:"danger",
-          msg:`🚨 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — GROS DÉFICIT. Action requise : poser ${joursCP}j CP (${cpRestants.toFixed(1)}j restants) ou ajouter ${deficit.toFixed(1)}h de travail`});
-      } else {
-        alerts.push({emp, type:"danger",
-          msg:`🚨 ${nom} : ${worked.toFixed(1)}h vs ${emp.heures_mois}h (−${deficit.toFixed(1)}h) — GROS DÉFICIT. ${nom} n'a plus de CP → planifier ${deficit.toFixed(1)}h de travail OBLIGATOIRE`});
-      }
-    }
-    // 90-110% : silence (zone normale modulation)
+    // Sinon : silence (zone normale)
+    // FIN PATCH 5 ──────────────────────────────────────────────────────────
 
     // Retard alerts
     if (retards >= 3) alerts.push({emp, type:"danger", retards, totalRetardH,
@@ -5388,7 +5426,17 @@ function ShiftModal({emp,date,shift,shifts,onSave,onClose}) {
         {type==="retard"&&(<div style={{marginBottom:10}}><label style={S.lbl}>Durée retard (h)</label><input type="number" step="0.25" min={0} max={8} value={hRetard} onChange={e=>setHRetard(Number(e.target.value))} style={S.inp}/></div>)}
         <div style={{marginBottom:12}}><label style={S.lbl}>Note</label><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Certificat, départ anticipé…" style={S.inp}/></div>
         <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>onSave({type,deb,fin,h:type==="conges"?cpH:Math.max(0,h),note,hRetard})} style={{...S.btn,...S.btnG,flex:1}}>Valider</button>
+          <button onClick={()=>{
+            // PATCH 1 (26/06/2026) — Anti-régression repos sales : ne JAMAIS sauver heures/horaires
+            // pour les types non rémunérés (repos, absent, absent_inj, poei).
+            // Avant ce fix, changer un shift "travail" en "repos" gardait les deb/fin/h saisis
+            // → Firebase contenait des shifts type='repos' avec h=7, source de confusion.
+            const noPaidTypes = ["repos","absent","absent_inj","poei"];
+            const data = noPaidTypes.includes(type)
+              ? { type, note }  // type non rémunéré : conserver SEULEMENT type + note
+              : { type, deb, fin, h: type==="conges" ? cpH : Math.max(0,h), note, hRetard };
+            onSave(data);
+          }} style={{...S.btn,...S.btnG,flex:1}}>Valider</button>
           {shift&&<button onClick={()=>onSave(null)} style={{...S.btn,...S.btnD}}>Effacer</button>}
           <button onClick={onClose} style={{...S.btn,...S.btnS}}>Annuler</button>
         </div>
@@ -5831,9 +5879,18 @@ function exportPaieColored(month, year, employees, planning) {
     return mode;
   }
   function cpHours(sh, empId, jourDate) {
-    var pw = (jourDate.getDay() + 6) % 7;
-    var m = modeHeuresJourSemaine(empId, pw);
-    if (m !== null) return m;
+    // PATCH 3 (26/06/2026) — RÈGLE B figée : mensualisation H_mois / 21,67
+    // Avant ce fix : règle MODE (heures les + fréquentes le même jour de semaine)
+    //   → produisait des CP à 3h ou 10,5h selon les outliers (juin Aythann 57,5h CP).
+    // Maintenant : 1 CP = H_contrat_mensuel / 21,67 jours ouvrés moyens
+    //   → Aythann 121,33h/mois = 5,6h/CP fixe. Stable, prévisible, légalement défendable.
+    //   → Évite les heures sup involontaires liées aux CP surévalués.
+    var emp = team.find(function(e) { return e.id === empId; });
+    if (emp) {
+      var hMois = parseFloat(emp.heures_mois) || 0;
+      if (hMois > 0) return Math.round((hMois / 21.67) * 100) / 100;
+    }
+    // Fallback : si emp introuvable ou h_mois=0, garder l'heure saisie sur le shift
     return parseFloat(sh.h) || 0;
   }
 
@@ -6444,12 +6501,16 @@ function exportPaieXLSX(team, shifts, year, month) {
   }
   
   function cpHours(sh, empId, jourDate) {
-    const pyWeekday = (jourDate.getDay() + 6) % 7;
-    const mode = modeHeuresJourSemaine(empId, pyWeekday);
-    if (mode !== null) return mode;
+    // PATCH 3 (26/06/2026) — RÈGLE B figée : mensualisation H_mois / 21,67
+    // (cf. patch précédent dans exportPaieColored pour explication détaillée)
+    const emp = team.find(e => e.id === empId);
+    if (emp) {
+      const hMois = parseFloat(emp.heures_mois) || 0;
+      if (hMois > 0) return Math.round((hMois / 21.67) * 100) / 100;
+    }
     return parseFloat(sh.h) || 0;
   }
-  
+
   // ── Création du workbook ──
   const wb = XLSX.utils.book_new();
   
@@ -8500,6 +8561,64 @@ function App() {
 
   // Init SHA-256 hash on first load
   useEffect(()=>{initHash();},[]);
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PATCH 2 (26/06/2026) — MIGRATION AUTO : nettoyage des shifts "repos sales"
+  // Au premier login admin après ce déploiement, nettoie tous les shifts type='repos'
+  // qui ont des h/deb/fin/hRetard saisis à tort (bug pré-PATCH 1).
+  // BACKUP automatique AVANT modification → reversible via Firebase Console.
+  // Marqueur Firebase 'clean-repos-v1-done' empêche toute ré-exécution.
+  // ═══════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (authMode !== "admin") return;
+    (async () => {
+      try {
+        const db = getFbDb();
+        if (!db) return;
+        const flagRef = db.ref("abracadaparc/_migrations/clean-repos-v1-done");
+        const snap = await flagRef.once("value");
+        if (snap.val()) return; // déjà fait
+
+        console.log("[Migration repos v1] Démarrage du nettoyage automatique...");
+        const shSnap = await db.ref("abracadaparc/abr26_shifts_v4").once("value");
+        const currentShifts = shSnap.val() || {};
+
+        // Backup AVANT toute modification
+        const backupKey = "avant-migration-repos-v1-" + Date.now();
+        await db.ref("abracadaparc/_backups_auto/" + backupKey).set({
+          abr26_shifts_v4: currentShifts,
+          saved_at: Date.now(),
+          saved_by: "migration-auto-repos-v1",
+          motif: "Backup auto AVANT nettoyage shifts repos sales (PATCH 2)"
+        });
+
+        // Nettoyage : pour chaque shift type='repos' avec h/deb/fin saisis → cleaner
+        let cleaned = 0;
+        const updates = {};
+        Object.entries(currentShifts).forEach(([k, sh]) => {
+          if (!sh || sh.type !== "repos") return;
+          const dirty = (sh.h && parseFloat(sh.h) > 0) || sh.deb || sh.fin || sh.hRetard;
+          if (!dirty) return;
+          const clean = { type: "repos" };
+          if (sh.note) clean.note = sh.note;  // garder note (commentaire info)
+          updates[k] = clean;
+          cleaned++;
+        });
+
+        if (cleaned > 0) {
+          await db.ref("abracadaparc/abr26_shifts_v4").update(updates);
+        }
+        await flagRef.set({ done_at: Date.now(), cleaned, backup_key: backupKey });
+        console.log("[Migration repos v1] ✅ " + cleaned + " shifts nettoyés. Backup : " + backupKey);
+
+        if (cleaned > 0 && typeof window.abr_toast === "function") {
+          window.abr_toast("🧹 Migration auto : " + cleaned + " shifts repos nettoyés", "ok");
+        }
+      } catch (e) {
+        console.error("[Migration repos v1] Erreur :", e);
+      }
+    })();
+  }, [authMode]);
 
   // Auto-fill shifts — DÉSACTIVÉ DÉFINITIVEMENT le 14/05/2026.
   // Cause d'incident (14 mai matin) : un onglet équipe qui se réveille du sommeil
